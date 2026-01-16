@@ -1,0 +1,46 @@
+# -------------------------------
+# Core LangChain (updated for compatibility)
+# -------------------------------
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0
+langsmith>=0.1.17
+
+# -------------------------------
+# Vector store & embeddings
+# -------------------------------
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.1
+
+# -------------------------------
+# HuggingFace ecosystem
+# -------------------------------
+transformers>=4.39.3
+tokenizers>=0.15.2
+huggingface-hub>=0.23.4
+datasets>=2.18.0
+
+# -------------------------------
+# ML / Numeric
+# -------------------------------
+torch>=2.1.2
+numpy>=1.24.3,<2.0
+
+# -------------------------------
+# Utilities
+# -------------------------------
+tqdm>=4.66.2
+python-dotenv>=1.0.1
+requests>=2.31.0
+
+# -------------------------------
+# RAG Evaluation
+# -------------------------------
+ragas>=0.2.0
+langchain-google-genai>=2.0.0
+
+# -------------------------------
+# Google AI (required by langchain-google-genai)
+# -------------------------------
+google-generativeai>=0.8.0

@@ -1,0 +1,55 @@
+# Environment variables
+.env
+.env.local
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files
+data/
+*.faiss
+vectorstore/
+
+# Model cache
+.cache/
+models/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results
+results/
+*.json
+!requirements.json
+
+
+
+
