@@ -1,12 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -20,93 +16,57 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# PyInstaller
-*.manifest
-*.spec
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*/.ipynb_checkpoints/*
 
-# IPython
-profile_default/
-ipython_config.py
+# Models and data (large files)
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
+*.ckpt
 
-# pyenv
-.python-version
+# Outputs
+rag_output/
+examples_output/
+vectorstore/
+*.faiss
+*.pkl
 
-# Environments
+# Data (optional - uncomment if you don't want to track data)
+# data/
+
+# Environment variables
 .env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+.env.local
 
-# VS Code
-.vscode/
-*.code-workspace
+# Logs
+*.log
+logs/
 
-# PyCharm
-.idea/
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# macOS
+# OS
 .DS_Store
-
-# Windows
 Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
 
-# Data files (uncomment if needed)
-*.zip
-*.tar.gz
-# *.csv
-# *.json
-# *.pkl
-# *.h5
-
-# Model files (uncomment if needed)
-# *.pt
-# *.pth
-# *.ckpt
-# models/
-
-# train csv
-*train.csv
-*train_async.csv
+# Temporary files
+*.tmp
+*.temp
