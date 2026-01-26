@@ -55,6 +55,11 @@ vectorstore/
 # Data (optional - uncomment if you don't want to track data)
 # data/
 
+# Large training data files
+data/hotpot_qa/train.csv
+data/hotpot_qa/valid.csv
+data/hotpot_qa/*.csv
+
 # Environment variables
 .env
 .env.local
