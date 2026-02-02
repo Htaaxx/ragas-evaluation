@@ -176,16 +176,13 @@ class RAGSystem:
 		# Download from HuggingFace
 		print(f"📥 Downloading {model_id}...")
 		try:
-			# Download model
-			hf_model_path = snapshot_download(model_id, token=self.hf_token)
-			
-			# Move to local cache
-			if hf_model_path != str(local_path):
-				local_path.parent.mkdir(parents=True, exist_ok=True)
-				if local_path.exists():
-					shutil.rmtree(local_path)
-				shutil.move(hf_model_path, str(local_path))
-			
+			# Download directly to local_dir (no moving needed)
+			snapshot_download(
+				model_id,
+				local_dir=str(local_path),
+				local_dir_use_symlinks=False,
+				token=self.hf_token,
+			)
 			print(f"✅ Saved to cache: {local_path.name}")
 			return local_path
 			
