@@ -13,11 +13,16 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from transformers import (
-    AdamW,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
 )
+
+# AdamW moved to torch.optim in newer versions
+try:
+    from transformers import AdamW
+except ImportError:
+    from torch.optim import AdamW
 
 from ..config import RAGConfig
 from ..data.loader import TrainExample

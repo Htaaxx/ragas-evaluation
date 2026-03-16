@@ -33,11 +33,16 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from transformers import (
-	AdamW,
 	AutoModelForSeq2SeqLM,
 	AutoTokenizer,
 	get_linear_schedule_with_warmup,
 )
+
+# AdamW moved to torch.optim in newer versions
+try:
+	from transformers import AdamW
+except ImportError:
+	from torch.optim import AdamW
 
 
 @dataclass
@@ -283,7 +288,7 @@ class RAGSystem:
 			raise ValueError("⚠️ Call create_retriever_train_loader() first")
 
 		self.encoder.to(self.device)
-		optimizer = optim.AdamW(self.encoder.parameters(), lr=lr)
+		optimizer = AdamW(self.encoder.parameters(), lr=lr)
 		loss_fn = nn.CrossEntropyLoss()
 		scaler = GradScaler(enabled=use_fp16)
 

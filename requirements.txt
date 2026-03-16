@@ -15,6 +15,13 @@ tqdm>=4.65.0
 huggingface-hub>=0.16.0
 python-dotenv>=1.0.0
 
+# ASQA and RAG evaluation
+datasets>=2.14.0
+ragas>=0.1.0
+rouge-score>=0.1.2
+bert-score>=0.3.13
+google-generativeai>=0.3.0
+
 # Optional: For development
 # pytest>=7.0.0
 # black>=23.0.0

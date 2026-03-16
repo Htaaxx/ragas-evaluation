@@ -11,7 +11,8 @@ from typing import List, Optional
 import numpy as np
 import torch
 from sentence_transformers import InputExample, SentenceTransformer
-from torch import nn, optim
+from torch import nn
+from torch.optim import AdamW
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -140,7 +141,7 @@ class RetrieverTrainer:
         
         # Setup training
         self.model.train()
-        optimizer = optim.AdamW(self.model.parameters(), lr=lr)
+        optimizer = AdamW(self.model.parameters(), lr=lr)
         loss_fn = nn.CrossEntropyLoss()
         scaler = GradScaler(enabled=use_fp16)
         
