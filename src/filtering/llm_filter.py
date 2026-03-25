@@ -7,12 +7,34 @@ This module implements two-stage filtering:
 """
 
 import asyncio
+import concurrent.futures
 import os
 import re
 import time
 from asyncio import Semaphore
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+
+def _run_async(coro):
+    """
+    Run an async coroutine from synchronous code in any context.
+
+    ``asyncio.run()`` raises RuntimeError when called from inside a running
+    event loop (e.g. Jupyter notebooks). This helper detects that situation
+    and instead submits the coroutine to a fresh event loop running in a
+    background thread, which is always safe.
+    """
+    try:
+        asyncio.get_running_loop()
+        # We are inside a running loop (Jupyter / IPython).
+        # Run the coroutine in a separate thread that owns its own event loop.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    except RuntimeError:
+        # No running loop — standard asyncio.run() is fine.
+        return asyncio.run(coro)
 
 import google.generativeai as genai
 from tqdm.auto import tqdm
@@ -198,7 +220,7 @@ Be strict - only highly relevant contexts should score above 6."""
         Returns:
             List of ContextFilterResult objects
         """
-        return asyncio.run(self.filter_contexts_async(question, passages))
+        return _run_async(self.filter_contexts_async(question, passages))
     
     def get_filtered_passages(
         self,
@@ -416,7 +438,7 @@ Be strict - answers should score high on all three criteria to be marked GOOD.""
         Returns:
             List of AnswerFilterResult objects
         """
-        return asyncio.run(self.filter_answers_async(questions, answers, contexts_list))
+        return _run_async(self.filter_answers_async(questions, answers, contexts_list))
     
     def evaluate_single_answer(
         self,

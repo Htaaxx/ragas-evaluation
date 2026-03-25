@@ -100,6 +100,11 @@ class RAGConfig:
         default_factory=lambda: os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
     )
     
+    # ==================== Checkpoint Configuration ====================
+    retriever_checkpoint_steps: int = 100   # Save retriever checkpoint every N steps
+    generator_checkpoint_steps: int = 200   # Save generator checkpoint every N steps
+    checkpoint_dir: Optional[Path] = None   # Defaults to output_dir / "checkpoints"
+
     # ==================== Logging Configuration ====================
     # Logging settings
     log_level: str = "INFO"
@@ -128,11 +133,21 @@ class RAGConfig:
         else:
             self.index_dir = Path(self.index_dir)
         
+        # Set checkpoint_dir if not provided
+        if self.checkpoint_dir is not None:
+            self.checkpoint_dir = Path(self.checkpoint_dir)
+        
         # Create directories
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir.mkdir(parents=True, exist_ok=True)
     
+    def get_checkpoint_dir(self) -> Path:
+        """Get path to checkpoint directory, creating it if needed."""
+        base = self.checkpoint_dir if self.checkpoint_dir is not None else (self.output_dir / "checkpoints")
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
     def get_retriever_model_path(self) -> Path:
         """Get path to trained retriever model."""
         return self.models_dir / self.retriever_save_name

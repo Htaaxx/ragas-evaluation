@@ -147,44 +147,44 @@ class RAGSystem:
         self,
         epochs: Optional[int] = None,
         batch_size: Optional[int] = None,
-        lr: Optional[float] = None
+        lr: Optional[float] = None,
+        resume_from_checkpoint: bool = True,
     ):
         """
         Train the retriever model.
-        
+
         Args:
             epochs: Number of epochs (default: from config)
             batch_size: Batch size (default: from config)
             lr: Learning rate (default: from config)
+            resume_from_checkpoint: Resume from the last checkpoint if one exists
         """
         print(f"\n{'='*60}")
         print("Training Retriever")
         print(f"{'='*60}")
-        
-        # Create training examples
+
         examples = self.data_loader.create_retriever_examples()
-        
-        # Create trainer
-        trainer = RetrieverTrainer(
+
+        # Store trainer on self so callers can free its memory after training
+        self.retriever_trainer = RetrieverTrainer(
             model=self.encoder,
             config=self.config,
             device=self.config.device
         )
-        
-        # Create dataloader
-        train_loader = trainer.create_dataloader(
+
+        train_loader = self.retriever_trainer.create_dataloader(
             examples=examples,
             batch_size=batch_size,
             shuffle=True
         )
-        
-        # Train
-        self.encoder = trainer.train(
+
+        self.encoder = self.retriever_trainer.train(
             train_loader=train_loader,
             epochs=epochs,
-            lr=lr
+            lr=lr,
+            resume_from_checkpoint=resume_from_checkpoint,
         )
-        
+
         print(f"{'='*60}\n")
     
     def evaluate_retriever(self):
@@ -235,32 +235,31 @@ class RAGSystem:
         epochs: Optional[int] = None,
         batch_size: Optional[int] = None,
         lr: Optional[float] = None,
-        max_examples: Optional[int] = None
+        max_examples: Optional[int] = None,
+        resume_from_checkpoint: bool = True,
     ):
         """
         Train the generator model.
-        
+
         Args:
             epochs: Number of epochs (default: from config)
             batch_size: Batch size (default: from config)
             lr: Learning rate (default: from config)
             max_examples: Maximum training examples (None = all)
+            resume_from_checkpoint: Resume from the last checkpoint if one exists
         """
         print(f"\n{'='*60}")
         print("Training Generator")
         print(f"{'='*60}")
-        
-        # Create training examples
+
         examples = self.data_loader.create_generator_examples(
             max_examples=max_examples
         )
-        
-        # Create retrieval function
+
         def retrieval_fn(question: str, top_k: int) -> List[str]:
             docs, _, _ = self.indexer.search(question, top_k=top_k)
             return docs
-        
-        # Create trainer
+
         trainer = GeneratorTrainer(
             model=self.generator,
             tokenizer=self.tokenizer,
@@ -268,21 +267,20 @@ class RAGSystem:
             retrieval_fn=retrieval_fn,
             device=self.config.device
         )
-        
-        # Create dataloader
+
         train_loader = trainer.create_dataloader(
             examples=examples,
             batch_size=batch_size,
             shuffle=True
         )
-        
-        # Train
+
         self.generator = trainer.train(
             train_loader=train_loader,
             epochs=epochs,
-            lr=lr
+            lr=lr,
+            resume_from_checkpoint=resume_from_checkpoint,
         )
-        
+
         print(f"{'='*60}\n")
     
     def create_qa_pipeline(self) -> QAPipeline:
