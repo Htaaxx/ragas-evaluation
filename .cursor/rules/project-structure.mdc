@@ -1,0 +1,29 @@
+---
+description: RAG thesis repository structure and organization rules
+alwaysApply: true
+---
+
+# Repository Structure
+
+Organize code by **pipeline stage**, not file type.
+
+```
+/src
+  /data_ingestion    /preprocessing    /embedding
+  /retrieval         /filtering        /ranking
+  /generation        /evaluation       /utils    /configs
+/experiments         /notebooks        /tests
+```
+
+- Each folder = one RAG pipeline stage
+- Filtering logic lives ONLY in `/src/filtering`
+- Experimental code goes in `/experiments`, never in `/src`
+- Reusable logic goes in `/src`, never in notebooks
+
+## Pipeline Flow
+
+```
+ingest → preprocess → embed → retrieve → filter → rank → generate
+```
+
+Each step must be independent, testable, and replaceable.

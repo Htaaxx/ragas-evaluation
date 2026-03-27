@@ -1,0 +1,50 @@
+---
+description: Jupyter notebook standards and code separation rules
+globs: "**/*.ipynb"
+alwaysApply: false
+---
+
+# Notebook Rules
+
+Notebooks are for **exploration, visualization, and quick experiments only**.
+
+## Code Separation (CRITICAL)
+
+- If code is reused more than once → move to `/src`
+- If code is longer than ~30-50 lines → move to `/src`
+- Notebooks IMPORT from `/src`, never define core logic
+
+```python
+# BAD - defining logic inside notebook
+def semantic_filter(docs, query, threshold=0.6):
+    ...  # 50+ lines of logic
+
+# GOOD - importing from src
+from src.filtering.semantic_filter import SemanticFilter
+filter = SemanticFilter(config)
+results = filter.filter(documents, query)
+```
+
+## Structure
+
+Each notebook must have: Title, Objective, Dataset description, Step-by-step sections, Conclusion.
+
+## Organization
+
+```
+/notebooks
+  /exploration     # data exploration
+  /experiments     # quick experiments
+  /visualization   # plots and analysis
+```
+
+## Naming
+
+Use descriptive names: `rag_filtering_baseline.ipynb`, `threshold_analysis.ipynb`
+Avoid: `test.ipynb`, `final.ipynb`, `new_new.ipynb`
+
+## Reproducibility
+
+- Fix random seeds. Load configs from `/src/configs/`.
+- Do NOT hardcode paths or parameters.
+- Save results to `/evaluation/results/`.

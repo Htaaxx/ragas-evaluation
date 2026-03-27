@@ -1,0 +1,42 @@
+---
+description: Configuration management and reproducibility standards
+globs: "**/configs/**,**/*.yaml,**/*.json"
+alwaysApply: false
+---
+
+# Configuration & Reproducibility
+
+## Configuration Management
+
+- Use YAML/JSON configs for thresholds, models, and parameters
+- No hardcoding. Every tunable value comes from config files.
+- Store configs in `/src/configs/`
+
+```yaml
+# configs/filtering.yaml
+semantic_filter:
+  threshold: 0.6
+  model: "all-MiniLM-L6-v2"
+  top_k: 5
+
+llm_filter:
+  context_threshold: 6.0
+  answer_threshold: 6.0
+  model: "gemini-2.5-flash"
+```
+
+```python
+# BAD
+threshold = 0.6  # hardcoded
+
+# GOOD
+config = load_config("configs/filtering.yaml")
+threshold = config.semantic_filter.threshold
+```
+
+## Reproducibility
+
+- Fix random seeds in every script and notebook
+- Save configs alongside results
+- Track dataset versions and model versions
+- Cache embeddings to avoid recomputation

@@ -1,0 +1,40 @@
+---
+description: Evaluation metrics and experiment tracking standards
+globs: "**/evaluation/**,**/experiments/**"
+alwaysApply: false
+---
+
+# Evaluation & Experimentation
+
+## Metrics (Required)
+
+Every experiment must measure and report:
+- Precision@K, Recall@K
+- MRR / nDCG
+- Filter-specific: % wrong answers filtered, % correct answers retained
+
+Store all results in `/evaluation/results/`.
+
+## Experiment Rules
+
+- NEVER mix experiment code with production pipeline
+- Each experiment gets its own folder in `/experiments/`
+- Each experiment includes: config file, logs, results
+- Log: parameters used, filtering strategy, all metrics
+
+```
+/experiments/
+  /semantic_filter_v1/
+    config.yaml
+    results.json
+    analysis.ipynb
+  /llm_filter_baseline/
+    config.yaml
+    results.json
+```
+
+## Testing
+
+- Unit test all filters and scoring logic
+- Test with known inputs/outputs
+- Tests live in `/tests/` mirroring `/src/` structure

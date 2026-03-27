@@ -1,0 +1,45 @@
+---
+description: Filtering layer design rules - core thesis focus
+globs: "**/filtering/**"
+alwaysApply: false
+---
+
+# Filtering Layer Design (Core Focus)
+
+Each filtering strategy must be **modular and isolated** using strategy pattern.
+
+## Required Structure
+
+```
+/src/filtering/
+  base_filter.py       # Abstract interface
+  keyword_filter.py    # Concrete strategy
+  semantic_filter.py   # Concrete strategy
+  hybrid_filter.py     # Concrete strategy
+  llm_filter.py        # LLM-based filtering
+```
+
+## Rules
+
+- Every filter inherits from `BaseFilter` (abstract class)
+- Standardized interface: takes `(documents, query)` → returns `scored/filtered documents`
+- NEVER hardcode thresholds → load from `/src/configs/`
+- All filters must be easily swappable
+- Log filtering decisions and scores for explainability
+
+```python
+# BAD
+def filter(docs):
+    return [d for d in docs if d.score > 0.6]  # hardcoded threshold
+
+# GOOD
+class SemanticFilter(BaseFilter):
+    def __init__(self, config: FilterConfig):
+        self.threshold = config.threshold
+
+    def filter(
+        self, documents: list[Document], query: str
+    ) -> list[ScoredDocument]:
+        scored = self._score_documents(documents, query)
+        return [d for d in scored if d.score >= self.threshold]
+```

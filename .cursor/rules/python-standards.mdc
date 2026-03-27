@@ -1,0 +1,35 @@
+---
+description: Python code style and formatting standards
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Standards
+
+- Follow PEP8 strictly. Use `black` for formatting, `isort` for imports.
+- Use type hints everywhere (`typing`, `pydantic`, dataclasses).
+- Max 100 characters per line.
+- Max 500 lines per file. Max 100 lines per function. Split aggressively.
+- Single responsibility per function. Prefer pure functions.
+- No in-place data mutation. Use schemas (`pydantic` / `dataclass`).
+- Use structured logging, not print statements.
+
+## Naming
+
+- `snake_case` for variables and functions
+- `PascalCase` for classes
+- Descriptive names always
+
+```python
+# BAD
+def proc(d, q):
+    return [x for x in d if x.s > 0.5]
+
+# GOOD
+def filter_documents_by_score(
+    documents: list[Document],
+    query: str,
+    threshold: float = 0.5,
+) -> list[ScoredDocument]:
+    return [doc for doc in documents if doc.score > threshold]
+```
