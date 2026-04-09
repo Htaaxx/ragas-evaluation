@@ -8,7 +8,7 @@ including model settings, training hyperparameters, and paths.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -89,7 +89,7 @@ class RAGConfig:
     
     # ==================== Evaluation Configuration ====================
     # Retriever evaluation
-    eval_top_k_values: list = field(default_factory=lambda: [1, 3, 5])
+    eval_top_k_values: List[int] = field(default_factory=lambda: [1, 3, 5])
     eval_batch_size: int = 64
     eval_cache_name: str = "corpus_embeds"
     eval_rebuild_cache: bool = False

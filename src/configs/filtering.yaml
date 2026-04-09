@@ -1,0 +1,35 @@
+# Filtering configuration — thresholds, models, and limits.
+# All tunable filtering parameters live here, NOT hardcoded in source.
+
+context_filter:
+  model_name: "gemini-2.5-flash"
+  threshold: 6.0
+  max_concurrent: 10
+  max_passage_chars: 1000    # truncation limit per passage
+  max_context_chunks: 5      # max chunks sent to answer filter
+
+answer_filter:
+  model_name: "gemini-2.5-flash"
+  threshold: 6.0
+  max_concurrent: 10
+  max_answer_chars: 1000     # truncation limit per answer
+  max_context_chars: 500     # truncation limit per context chunk
+
+llm_filter_pipeline:
+  context_threshold: 6.0
+  answer_threshold: 6.0
+  model_name: "gemini-2.5-flash"
+  max_concurrent: 10
+
+reward_filter:
+  optimal_threshold: 6.0
+  min_passages: 1
+  max_passages: 5
+  min_reward: 0.50
+  retry_delta: 1.0
+  max_retries: 3
+  use_proxy_reward: true
+  weight_fitting_method: "correlation"
+
+threshold_calibrator:
+  candidate_thresholds: [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]

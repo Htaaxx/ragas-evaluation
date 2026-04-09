@@ -1,14 +1,18 @@
 """
 Data loading and preprocessing module.
 
-This module provides utilities for loading and preprocessing the HotpotQA dataset
-for RAG training.
+Provides loaders for HotpotQA and ASQA datasets, plus shared
+data models (TrainExample, RetrieverExample).
 """
 
-from .loader import HotpotQALoader, TrainExample, RetrieverExample
+from .base_loader import BaseDataLoader, RetrieverExample, TrainExample
+from .asqa_loader import ASQALoader
+from .hotpotqa_loader import HotpotQALoader
 
 __all__ = [
+    "BaseDataLoader",
     "HotpotQALoader",
+    "ASQALoader",
     "TrainExample",
     "RetrieverExample",
 ]
