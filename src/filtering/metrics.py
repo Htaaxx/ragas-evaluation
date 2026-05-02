@@ -1,36 +1,37 @@
 """
-HybridMetricBundle — compute up to 9 quality metrics for RAG evaluation.
+AnswerMetricBundle — score generated answers against ground truth.
 
-Proxy bundle (reference-free, inference-safe, 3 metrics):
-    faithfulness, answer_relevancy, context_relevancy
+Black-box evaluation: the only signal is whether the generated answer
+matches the expected answer.  Context is intentionally ignored.
 
-Full bundle (requires ground truth, calibration only, up to 9 metrics):
-    + context_precision, context_recall, answer_correctness,
-      answer_similarity, token_f1, rouge_l
-    + bertscore_f1 if bert_score package is installed
+Metrics (requires ground truth):
+    answer_correctness, answer_similarity  (RAGAS, if installed)
+    token_f1, rouge_l                      (always available)
+    bertscore_f1                           (if bert_score is installed)
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import re
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_tokens(text: str) -> list[str]:
+    """Lowercase, strip punctuation, split on whitespace (SQuAD-style)."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    return text.split()
 
 # ---------------------------------------------------------------------------
 # Optional heavy dependencies — graceful degradation
 # ---------------------------------------------------------------------------
 try:
     from ragas import evaluate as ragas_evaluate
-    from ragas.metrics import (
-        answer_correctness,
-        answer_relevancy,
-        answer_similarity,
-        context_precision,
-        context_recall,
-        context_relevancy,
-        faithfulness,
-    )
+    from ragas.metrics import answer_correctness, answer_similarity
     from datasets import Dataset as HFDataset
 
     _RAGAS_AVAILABLE = True
@@ -45,42 +46,29 @@ except ImportError:
     _BERTSCORE_AVAILABLE = False
 
 
-class HybridMetricBundle:
+class AnswerMetricBundle:
     """
-    Compute up to 9 quality metrics for a batch of (q, a, C, [gt]) triples.
+    Compute answer-correctness metrics for a batch of (question, answer, ground_truth) triples.
 
-    All RAGAS metrics are computed in a single ``ragas.evaluate()`` call per
-    mode to minimise LLM round-trips.
+    All RAGAS metrics are computed in a single ``ragas.evaluate()`` call
+    to minimise LLM round-trips.
     """
 
-    PROXY_RAGAS = (
-        [faithfulness, answer_relevancy, context_relevancy]
-        if _RAGAS_AVAILABLE
-        else []
-    )
-    FULL_RAGAS = (
-        [
-            faithfulness,
-            answer_relevancy,
-            context_precision,
-            context_recall,
-            answer_correctness,
-            answer_similarity,
-            context_relevancy,
-        ]
+    RAGAS_METRICS = (
+        [answer_correctness, answer_similarity]
         if _RAGAS_AVAILABLE
         else []
     )
 
     # ------------------------------------------------------------------ #
-    # Static lexical / semantic helpers                                    #
+    # Lexical / semantic helpers                                           #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def token_f1(pred: str, gold: str) -> float:
-        """SQuAD-style token-level F1 (case-insensitive, whitespace split)."""
-        pred_toks = pred.lower().split()
-        gold_toks = gold.lower().split()
+        """SQuAD-style token-level F1 (case-insensitive, punctuation-stripped)."""
+        pred_toks = _normalize_tokens(pred)
+        gold_toks = _normalize_tokens(gold)
         if not pred_toks or not gold_toks:
             return 0.0
         common = set(pred_toks) & set(gold_toks)
@@ -93,8 +81,8 @@ class HybridMetricBundle:
     @staticmethod
     def rouge_l(pred: str, gold: str) -> float:
         """ROUGE-L F1 via dynamic programming on LCS."""
-        pred_toks = pred.lower().split()
-        gold_toks = gold.lower().split()
+        pred_toks = _normalize_tokens(pred)
+        gold_toks = _normalize_tokens(gold)
         if not pred_toks or not gold_toks:
             return 0.0
         m, n = len(gold_toks), len(pred_toks)
@@ -113,73 +101,45 @@ class HybridMetricBundle:
         return 2.0 * prec * rec / (prec + rec)
 
     # ------------------------------------------------------------------ #
-    # Compute methods                                                       #
+    # Core compute                                                         #
     # ------------------------------------------------------------------ #
 
-    def compute_proxy(
+    def compute(
         self,
         questions: List[str],
         answers: List[str],
-        contexts: List[List[str]],
-    ) -> List[Dict[str, float]]:
-        """Reference-free metric bundle (3 metrics). Safe at inference time."""
-        if not _RAGAS_AVAILABLE:
-            return [
-                {
-                    "faithfulness": 0.0,
-                    "answer_relevancy": 0.0,
-                    "context_relevancy": 0.0,
-                }
-                for _ in questions
-            ]
-
-        dataset = HFDataset.from_dict(
-            {"question": questions, "answer": answers, "contexts": contexts}
-        )
-        result_df = ragas_evaluate(dataset, metrics=self.PROXY_RAGAS).to_pandas()
-
-        out: List[Dict[str, float]] = []
-        for _, row in result_df.iterrows():
-            out.append(
-                {
-                    "faithfulness": float(row.get("faithfulness", 0.0)),
-                    "answer_relevancy": float(row.get("answer_relevancy", 0.0)),
-                    "context_relevancy": float(row.get("context_relevancy", 0.0)),
-                }
-            )
-        return out
-
-    def compute_full(
-        self,
-        questions: List[str],
-        answers: List[str],
-        contexts: List[List[str]],
         ground_truths: List[str],
     ) -> List[Dict[str, float]]:
-        """Full metric bundle (up to 9 metrics). Requires ground truth."""
+        """Score answers against ground truth.  Context is not used."""
         if not _RAGAS_AVAILABLE:
             return self._lexical_only(answers, ground_truths)
 
-        dataset = HFDataset.from_dict(
-            {
-                "question": questions,
-                "answer": answers,
-                "contexts": contexts,
-                "ground_truth": ground_truths,
-            }
-        )
-        result_df = ragas_evaluate(dataset, metrics=self.FULL_RAGAS).to_pandas()
+        ragas_scores: Dict[int, Dict[str, float]] = {}
+        try:
+            dataset = HFDataset.from_dict(
+                {
+                    "question": questions,
+                    "answer": answers,
+                    "contexts": [[] for _ in questions],
+                    "ground_truth": ground_truths,
+                }
+            )
+            result_df = ragas_evaluate(dataset, metrics=self.RAGAS_METRICS).to_pandas()
+            for i, (_, row) in enumerate(result_df.iterrows()):
+                ac = row.get("answer_correctness", 0.0)
+                asim = row.get("answer_similarity", 0.0)
+                ragas_scores[i] = {
+                    "answer_correctness": 0.0 if (isinstance(ac, float) and math.isnan(ac)) else float(ac),
+                    "answer_similarity": 0.0 if (isinstance(asim, float) and math.isnan(asim)) else float(asim),
+                }
+        except Exception:
+            logger.warning("RAGAS evaluation failed; using lexical metrics only.")
 
         out: List[Dict[str, float]] = []
-        for i, (_, row) in enumerate(result_df.iterrows()):
+        for i in range(len(questions)):
             entry: Dict[str, float] = {
-                "faithfulness": float(row.get("faithfulness", 0.0)),
-                "answer_relevancy": float(row.get("answer_relevancy", 0.0)),
-                "context_precision": float(row.get("context_precision", 0.0)),
-                "context_recall": float(row.get("context_recall", 0.0)),
-                "answer_correctness": float(row.get("answer_correctness", 0.0)),
-                "answer_similarity": float(row.get("answer_similarity", 0.0)),
-                "context_relevancy": float(row.get("context_relevancy", 0.0)),
+                "answer_correctness": ragas_scores.get(i, {}).get("answer_correctness", 0.0),
+                "answer_similarity": ragas_scores.get(i, {}).get("answer_similarity", 0.0),
                 "token_f1": self.token_f1(answers[i], ground_truths[i]),
                 "rouge_l": self.rouge_l(answers[i], ground_truths[i]),
             }
@@ -203,13 +163,8 @@ class HybridMetricBundle:
         """Fallback when RAGAS is not installed — lexical metrics only."""
         return [
             {
-                "faithfulness": 0.0,
-                "answer_relevancy": 0.0,
-                "context_precision": 0.0,
-                "context_recall": 0.0,
                 "answer_correctness": 0.0,
                 "answer_similarity": 0.0,
-                "context_relevancy": 0.0,
                 "token_f1": self.token_f1(a, g),
                 "rouge_l": self.rouge_l(a, g),
             }

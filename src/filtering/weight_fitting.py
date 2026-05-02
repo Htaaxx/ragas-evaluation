@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .data_models import LITERATURE_PRIORS
+from .data_models import ANSWER_WEIGHT_PRIORS
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class WeightBank:
 
     def __init__(self) -> None:
         self._priors: Dict[str, Dict[str, float]] = {
-            k: dict(v) for k, v in LITERATURE_PRIORS.items()
+            k: dict(v) for k, v in ANSWER_WEIGHT_PRIORS.items()
         }
         self._fitted: Dict[str, Dict[str, float]] = {}
 

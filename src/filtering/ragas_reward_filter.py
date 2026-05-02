@@ -1,39 +1,30 @@
 """
 Backward-compatible re-export shim.
 
-The original monolithic ``ragas_reward_filter.py`` has been split into:
-  - data_models.py   — dataclasses, literature priors
-  - metrics.py       — HybridMetricBundle
-  - weight_fitting.py — WeightBank, WeightFitter
-  - reward_filter.py — RAGASRewardComputer, ThresholdCalibrator, RAGASRewardFilter
-
+The filtering pipeline has been rewritten for black-box answer scoring.
 This file re-exports every public name so that existing ``from
 src.filtering.ragas_reward_filter import X`` statements continue to work.
 """
 
 from .data_models import (
-    CalibrationRecord,
+    ANSWER_WEIGHT_PRIORS,
+    AnswerReward,
     FilterDiagnostics,
-    LITERATURE_PRIORS,
-    RAGASReward,
 )
-from .metrics import HybridMetricBundle
+from .metrics import AnswerMetricBundle
 from .reward_filter import (
-    RAGASRewardComputer,
-    RAGASRewardFilter,
-    ThresholdCalibrator,
+    AnswerRewardComputer,
+    AnswerRewardFilter,
 )
 from .weight_fitting import WeightBank, WeightFitter
 
 __all__ = [
-    "RAGASReward",
+    "AnswerReward",
     "FilterDiagnostics",
-    "CalibrationRecord",
-    "LITERATURE_PRIORS",
-    "HybridMetricBundle",
+    "ANSWER_WEIGHT_PRIORS",
+    "AnswerMetricBundle",
     "WeightBank",
     "WeightFitter",
-    "RAGASRewardComputer",
-    "ThresholdCalibrator",
-    "RAGASRewardFilter",
+    "AnswerRewardComputer",
+    "AnswerRewardFilter",
 ]

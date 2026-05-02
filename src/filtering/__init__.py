@@ -1,48 +1,42 @@
 """
 Filtering module for RAG quality improvement.
 
+Black-box answer-only filtering: score generated answers against
+ground truth.  No context filtering.
+
 Provides:
-- BaseFilter — abstract interface for all filtering strategies
-- LLM-as-judge context and answer filtering (llm_filter)
-- H-RRGF — Hybrid RAGAS-Reward-Guided Filtering (reward_filter)
+- AnswerFilter — LLM-as-judge answer scoring vs ground truth
+- AnswerRewardFilter — generate-then-score pipeline
+- AnswerMetricBundle — RAGAS + lexical answer-correctness metrics
 """
 
-from .base_filter import BaseFilter, FilterResult, ScoredDocument
-from .llm_filter import AnswerFilter, ContextFilter, LLMFilterPipeline
+from .llm_filter import AnswerFilter, AnswerScoreResult
 from .data_models import (
-    CalibrationRecord,
+    ANSWER_WEIGHT_PRIORS,
+    AnswerReward,
     FilterDiagnostics,
-    LITERATURE_PRIORS,
-    RAGASReward,
 )
-from .metrics import HybridMetricBundle
+from .metrics import AnswerMetricBundle
 from .reward_filter import (
-    RAGASRewardComputer,
-    RAGASRewardFilter,
-    ThresholdCalibrator,
+    AnswerRewardComputer,
+    AnswerRewardFilter,
 )
 from .weight_fitting import WeightBank, WeightFitter
 
 __all__ = [
-    # Base interface
-    "BaseFilter",
-    "FilterResult",
-    "ScoredDocument",
-    # LLM filter
-    "ContextFilter",
+    # LLM answer scoring
     "AnswerFilter",
-    "LLMFilterPipeline",
-    # H-RRGF pipeline
-    "RAGASRewardFilter",
-    "RAGASRewardComputer",
-    "ThresholdCalibrator",
-    # Hybrid metric / weight components
-    "HybridMetricBundle",
+    "AnswerScoreResult",
+    # Reward pipeline
+    "AnswerRewardFilter",
+    "AnswerRewardComputer",
+    # Metric bundle
+    "AnswerMetricBundle",
+    # Weight components
     "WeightFitter",
     "WeightBank",
-    "LITERATURE_PRIORS",
+    "ANSWER_WEIGHT_PRIORS",
     # Data containers
-    "RAGASReward",
+    "AnswerReward",
     "FilterDiagnostics",
-    "CalibrationRecord",
 ]

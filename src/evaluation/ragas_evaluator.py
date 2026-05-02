@@ -1,8 +1,8 @@
 """
 RAGAS evaluation metrics for RAG systems.
 
-Implements comprehensive evaluation using the RAGAS framework:
-- Faithfulness, Answer Relevancy, Context Precision, Context Recall
+Black-box answer evaluation: default metrics focus on answer correctness
+against ground truth rather than faithfulness to retrieved context.
 """
 
 from __future__ import annotations
@@ -57,9 +57,7 @@ class RAGASEvaluator:
         }
 
         if metrics is None:
-            self.metrics = [
-                faithfulness, answer_relevancy, context_precision, context_recall
-            ]
+            self.metrics = [answer_correctness, answer_similarity]
         else:
             self.metrics = [
                 self.available_metrics[m]
@@ -74,14 +72,14 @@ class RAGASEvaluator:
         self,
         questions: List[str],
         answers: List[str],
-        contexts: List[List[str]],
+        contexts: Optional[List[List[str]]] = None,
         ground_truths: Optional[List[str]] = None,
     ) -> Dataset:
         """Prepare dataset in RAGAS format."""
         data: Dict[str, List] = {
             "question": questions,
             "answer": answers,
-            "contexts": contexts,
+            "contexts": contexts if contexts is not None else [[] for _ in questions],
         }
         if ground_truths is not None:
             data["ground_truth"] = ground_truths
@@ -91,7 +89,7 @@ class RAGASEvaluator:
         self,
         questions: List[str],
         answers: List[str],
-        contexts: List[List[str]],
+        contexts: Optional[List[List[str]]] = None,
         ground_truths: Optional[List[str]] = None,
         show_progress: bool = True,
     ) -> Dict[str, float]:
@@ -108,7 +106,7 @@ class RAGASEvaluator:
         df: pd.DataFrame,
         question_col: str = "question",
         answer_col: str = "predicted_answer",
-        contexts_col: str = "contexts",
+        contexts_col: Optional[str] = "contexts",
         ground_truth_col: Optional[str] = "gold_answer",
         show_progress: bool = True,
     ) -> Dict[str, float]:
@@ -116,16 +114,18 @@ class RAGASEvaluator:
         questions = df[question_col].tolist()
         answers = df[answer_col].tolist()
 
-        contexts: List[List[str]] = []
-        for ctx in df[contexts_col]:
-            if isinstance(ctx, str):
-                try:
-                    ctx = ast.literal_eval(ctx)
-                except Exception:
-                    ctx = [ctx]
-            elif not isinstance(ctx, list):
-                ctx = [str(ctx)]
-            contexts.append(ctx)
+        contexts: Optional[List[List[str]]] = None
+        if contexts_col and contexts_col in df.columns:
+            contexts = []
+            for ctx in df[contexts_col]:
+                if isinstance(ctx, str):
+                    try:
+                        ctx = ast.literal_eval(ctx)
+                    except Exception:
+                        ctx = [ctx]
+                elif not isinstance(ctx, list):
+                    ctx = [str(ctx)]
+                contexts.append(ctx)
 
         ground_truths = None
         if ground_truth_col and ground_truth_col in df.columns:
