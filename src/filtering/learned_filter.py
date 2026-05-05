@@ -265,7 +265,7 @@ def train_classifier(
         greater_is_better=True,
         save_total_limit=2,
         seed=seed,
-        fp16=torch.cuda.is_available(),
+        fp16=False, # DeBERTa-v3-small is small enough to train on CPU if needed
         report_to="none",
     )
 
