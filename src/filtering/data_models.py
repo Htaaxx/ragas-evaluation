@@ -34,6 +34,15 @@ class AnswerReward:
 
 
 @dataclass
+class FilterDecision:
+    """Accept/reject decision from the learned answer quality filter."""
+
+    accept: bool
+    confidence: float
+    reasoning: str
+
+
+@dataclass
 class FilterDiagnostics:
     """Diagnostic information emitted by the answer filter for one sample."""
 

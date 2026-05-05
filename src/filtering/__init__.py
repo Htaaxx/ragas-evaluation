@@ -1,21 +1,24 @@
 """
 Filtering module for RAG quality improvement.
 
-Black-box answer-only filtering: score generated answers against
-ground truth.  No context filtering.
-
 Provides:
+- AnswerQualityClassifier — learned accept/reject filter (no ground truth needed)
+- FilterEvaluator / FilterResult — evaluation harness with 6 required metrics
+- FilterDecision — structured accept/reject + confidence output
 - AnswerFilter — LLM-as-judge answer scoring vs ground truth
 - AnswerRewardFilter — generate-then-score pipeline
 - AnswerMetricBundle — RAGAS + lexical answer-correctness metrics
 """
 
-from .llm_filter import AnswerFilter, AnswerScoreResult
 from .data_models import (
     ANSWER_WEIGHT_PRIORS,
     AnswerReward,
+    FilterDecision,
     FilterDiagnostics,
 )
+from .filter_evaluator import FilterEvaluator, FilterResult
+from .learned_filter import AnswerQualityClassifier, train_classifier
+from .llm_filter import AnswerFilter, AnswerScoreResult
 from .metrics import AnswerMetricBundle
 from .reward_filter import (
     AnswerRewardComputer,
@@ -24,6 +27,12 @@ from .reward_filter import (
 from .weight_fitting import WeightBank, WeightFitter
 
 __all__ = [
+    # Learned filter (core thesis)
+    "AnswerQualityClassifier",
+    "train_classifier",
+    "FilterDecision",
+    "FilterEvaluator",
+    "FilterResult",
     # LLM answer scoring
     "AnswerFilter",
     "AnswerScoreResult",

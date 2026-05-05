@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -18,6 +18,10 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from ..config import RAGConfig
 from .indexer import DocumentIndexer
+
+if TYPE_CHECKING:
+    from ..filtering.data_models import FilterDecision
+    from ..filtering.learned_filter import AnswerQualityClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +132,23 @@ class QAPipeline:
         if return_contexts:
             return gen_answer, contexts
         return gen_answer
+
+    def filtered_answer(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+        filter_gate: Optional[AnswerQualityClassifier] = None,
+    ) -> Tuple[str, List[str], Optional[FilterDecision]]:
+        """Answer a question, then optionally run the quality filter.
+
+        Returns (answer, contexts, decision).  ``decision`` is ``None``
+        when no ``filter_gate`` is provided.
+        """
+        answer, contexts = self.answer(question, top_k=top_k, return_contexts=True)
+        if filter_gate is not None:
+            decision = filter_gate.predict(question, answer)
+            return answer, contexts, decision
+        return answer, contexts, None
 
     def batch_answer(
         self,

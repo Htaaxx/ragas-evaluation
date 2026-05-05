@@ -12,3 +12,15 @@ reward_filter:
   correctness_threshold: 0.50
   max_retries: 3
   dataset_type: "universal"
+
+learned_filter:
+  model_name: "microsoft/deberta-v3-small"
+  model_path: "models/answer_filter"
+  threshold: 0.5
+  max_length: 512
+  batch_size: 16
+  num_epochs: 3
+  learning_rate: 2.0e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  seed: 42
