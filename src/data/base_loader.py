@@ -1,7 +1,7 @@
 """
 Abstract base loader and shared data models for dataset loading.
 
-Concrete loaders (HotpotQALoader, ASQALoader) inherit from BaseDataLoader
+Concrete loaders (e.g. ASQALoader) inherit from BaseDataLoader
 to ensure a consistent interface across datasets.
 """
 

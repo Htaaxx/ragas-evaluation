@@ -9,8 +9,8 @@ paths:
   models_dir: "../models"
   output_dir: "./rag_output"
   data_dir: "./data"
-  train_data: "data/hotpot_qa/train.csv"
-  valid_data: "data/hotpot_qa/valid.csv"
+  train_data: "data/asqa/train.csv"
+  valid_data: "data/asqa/dev.csv"
 
 retriever_training:
   epochs: 5

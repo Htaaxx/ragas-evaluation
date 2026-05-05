@@ -37,9 +37,9 @@ class RAGConfig:
     index_dir: Optional[Path] = None  # Will be set to output_dir/index if None
     
     # ==================== Data Configuration ====================
-    # HotpotQA dataset paths
-    train_data_path: str = "data/hotpot_qa/train.csv"
-    valid_data_path: str = "data/hotpot_qa/valid.csv"
+    # ASQA dataset paths
+    train_data_path: str = "data/asqa/train.csv"
+    valid_data_path: str = "data/asqa/dev.csv"
     
     # Data processing
     max_train_samples: Optional[int] = None  # None = use all

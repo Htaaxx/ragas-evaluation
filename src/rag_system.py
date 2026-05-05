@@ -19,7 +19,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from .config import RAGConfig
-from .data.loader import HotpotQALoader
+from .data.loader import ASQALoader
 from .evaluation.retriever_evaluator import RetrieverEvaluator
 from .retrieval.indexer import DocumentIndexer
 from .retrieval.qa_pipeline import QAPipeline
@@ -79,7 +79,7 @@ class RAGSystem:
 
         self._load_models()
 
-        self.data_loader = HotpotQALoader()
+        self.data_loader = ASQALoader()
         self.indexer = DocumentIndexer(self.encoder, self.config)
 
         logger.info("=" * 60)
@@ -108,7 +108,7 @@ class RAGSystem:
         train_path: Optional[str] = None,
         valid_path: Optional[str] = None,
     ) -> None:
-        """Load HotpotQA data."""
+        """Load ASQA data."""
         train_path = train_path or self.config.train_data_path
         valid_path = valid_path or self.config.valid_data_path
 

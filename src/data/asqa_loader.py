@@ -24,7 +24,7 @@ class ASQALoader(BaseDataLoader):
         id, question, answer, context (JSON string), supporting_facts (JSON string)
 
     The ``df_valid`` property aliases ``df_dev`` for compatibility with
-    code that expects HotpotQALoader's interface.
+    code that expects a ``df_valid`` attribute.
     """
 
     def __init__(self) -> None:
@@ -33,7 +33,7 @@ class ASQALoader(BaseDataLoader):
 
     @property  # type: ignore[override]
     def df_valid(self) -> Optional[pd.DataFrame]:  # type: ignore[override]
-        """Alias for df_dev to maintain compatibility with HotpotQALoader."""
+        """Alias for df_dev to maintain compatibility with base interface."""
         return self.df_dev
 
     @df_valid.setter
