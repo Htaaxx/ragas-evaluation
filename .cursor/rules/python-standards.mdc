@@ -7,12 +7,12 @@ alwaysApply: false
 # Python Standards
 
 - Follow PEP8 strictly. Use `black` for formatting, `isort` for imports.
-- Use type hints everywhere (`typing`, `pydantic`, dataclasses).
+- Use type hints everywhere (`typing`, `dataclasses`).
 - Max 100 characters per line.
 - Max 500 lines per file. Max 100 lines per function. Split aggressively.
 - Single responsibility per function. Prefer pure functions.
-- No in-place data mutation. Use schemas (`pydantic` / `dataclass`).
-- Use structured logging, not print statements.
+- Use `@dataclass` for data containers (not pydantic -- not a project dependency).
+- Use structured logging (`logging` module), not print statements.
 
 ## Naming
 
@@ -22,14 +22,15 @@ alwaysApply: false
 
 ```python
 # BAD
-def proc(d, q):
-    return [x for x in d if x.s > 0.5]
+def proc(q, a):
+    return a if len(a) > 10 else None
 
 # GOOD
-def filter_documents_by_score(
-    documents: list[Document],
-    query: str,
+def classify_answer(
+    question: str,
+    answer: str,
     threshold: float = 0.5,
-) -> list[ScoredDocument]:
-    return [doc for doc in documents if doc.score > threshold]
+) -> FilterDecision:
+    prob = model.predict_proba(question, answer)
+    return FilterDecision(accept=prob >= threshold, confidence=prob)
 ```

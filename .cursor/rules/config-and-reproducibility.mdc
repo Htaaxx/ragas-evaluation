@@ -8,35 +8,46 @@ alwaysApply: false
 
 ## Configuration Management
 
-- Use YAML/JSON configs for thresholds, models, and parameters
+- Use YAML configs for thresholds, models, and parameters
 - No hardcoding. Every tunable value comes from config files.
 - Store configs in `/src/configs/`
 
 ```yaml
-# configs/filtering.yaml
-semantic_filter:
-  threshold: 0.6
-  model: "all-MiniLM-L6-v2"
-  top_k: 5
+# src/configs/filtering.yaml
+answer_filter:
+  model_name: "gemini-2.5-flash"
+  threshold: 6.0
+  max_concurrent: 10
 
-llm_filter:
-  context_threshold: 6.0
-  answer_threshold: 6.0
-  model: "gemini-2.5-flash"
+reward_filter:
+  correctness_threshold: 0.50
+  max_retries: 3
+  dataset_type: "universal"
+
+learned_filter:
+  model_name: "microsoft/deberta-v3-small"
+  model_path: "models/answer_filter"
+  threshold: 0.5
+  max_length: 512
+  batch_size: 16
+  num_epochs: 3
+  learning_rate: 2e-5
 ```
 
 ```python
 # BAD
-threshold = 0.6  # hardcoded
+threshold = 0.5  # hardcoded
 
 # GOOD
-config = load_config("configs/filtering.yaml")
-threshold = config.semantic_filter.threshold
+from src.configs import load_config
+config = load_config("filtering")
+threshold = config["learned_filter"]["threshold"]
 ```
 
 ## Reproducibility
 
-- Fix random seeds in every script and notebook
+- Fix random seeds in every script, notebook, and data split (seed=42)
 - Save configs alongside results
-- Track dataset versions and model versions
-- Cache embeddings to avoid recomputation
+- Track dataset versions: always note which split of labeled_asqa.csv was used
+- Cache model checkpoints to `models/` with descriptive names
+- Log training args, epoch metrics, and final test results to JSON

@@ -4,42 +4,60 @@ globs: "**/filtering/**"
 alwaysApply: false
 ---
 
-# Filtering Layer Design (Core Focus)
+# Filtering Layer Design (Core Thesis Focus)
 
-Each filtering strategy must be **modular and isolated** using strategy pattern.
+The filtering layer is an **answer quality gate** that operates AFTER generation.
+It takes (question, answer) and returns accept/reject. No ground truth or context
+is needed at inference time. This is a black-box answer-only approach.
 
-## Required Structure
+## Module Structure
 
 ```
 /src/filtering/
-  base_filter.py       # Abstract interface
-  keyword_filter.py    # Concrete strategy
-  semantic_filter.py   # Concrete strategy
-  hybrid_filter.py     # Concrete strategy
-  llm_filter.py        # LLM-based filtering
+  __init__.py            # Public API exports
+  data_models.py         # AnswerReward, FilterDiagnostics, FilterDecision
+  data_split.py          # load_and_split() for labeled_asqa.csv
+  learned_filter.py      # AnswerQualityClassifier + train_classifier()
+  filter_evaluator.py    # FilterEvaluator + FilterResult
+  metrics.py             # AnswerMetricBundle (existing, kept for analysis)
+  llm_filter.py          # AnswerFilter (existing, kept for LLM-as-judge)
+  reward_filter.py       # AnswerRewardFilter (existing, kept for retry logic)
+  weight_fitting.py      # WeightBank/WeightFitter (existing, kept)
 ```
 
 ## Rules
 
-- Every filter inherits from `BaseFilter` (abstract class)
-- Standardized interface: takes `(documents, query)` → returns `scored/filtered documents`
-- NEVER hardcode thresholds → load from `/src/configs/`
-- All filters must be easily swappable
-- Log filtering decisions and scores for explainability
+- The primary filter is `AnswerQualityClassifier` (fine-tuned DeBERTa-v3-small)
+- Filter interface: `predict(question, answer) -> FilterDecision`
+- `FilterDecision` contains: `accept: bool`, `confidence: float`, `reasoning: str`
+- NEVER hardcode thresholds -> load from `/src/configs/filtering.yaml`
+- All filter parameters (model_path, threshold, max_length) must come from config
+- Log every filter decision for post-hoc analysis
 
 ```python
-# BAD
-def filter(docs):
-    return [d for d in docs if d.score > 0.6]  # hardcoded threshold
+# BAD - hardcoded, no structured output
+def filter(question, answer):
+    return len(answer) > 50  # arbitrary
 
-# GOOD
-class SemanticFilter(BaseFilter):
-    def __init__(self, config: FilterConfig):
-        self.threshold = config.threshold
+# GOOD - config-driven, structured output
+class AnswerQualityClassifier:
+    def __init__(self, model_path: str, threshold: float = 0.5):
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        self.threshold = threshold
 
-    def filter(
-        self, documents: list[Document], query: str
-    ) -> list[ScoredDocument]:
-        scored = self._score_documents(documents, query)
-        return [d for d in scored if d.score >= self.threshold]
+    def predict(self, question: str, answer: str) -> FilterDecision:
+        prob = self._compute_probability(question, answer)
+        return FilterDecision(
+            accept=prob >= self.threshold,
+            confidence=prob,
+            reasoning=f"P(correct)={prob:.3f}",
+        )
 ```
+
+## Training Rules
+
+- Train on `labeled_asqa.csv` (8,706 samples: 4,353 correct + 4,353 hallucinated)
+- Split by base question ID to prevent data leakage
+- Monitor validation F1, use early stopping
+- Save best checkpoint to `models/answer_filter/`
+- Never evaluate on training data -- always use held-out test set

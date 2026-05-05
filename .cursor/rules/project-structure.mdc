@@ -5,25 +5,33 @@ alwaysApply: true
 
 # Repository Structure
 
-Organize code by **pipeline stage**, not file type.
+Organize code by **pipeline stage**, matching the actual codebase.
 
 ```
 /src
-  /data_ingestion    /preprocessing    /embedding
-  /retrieval         /filtering        /ranking
-  /generation        /evaluation       /utils    /configs
-/experiments         /notebooks        /tests
+  /data              # Dataset loaders (ASQALoader, HotpotQALoader)
+  /retrieval         # QAPipeline, DocumentIndexer (FAISS)
+  /training          # Retriever and generator training
+  /filtering         # Answer quality filtering (CORE THESIS FOCUS)
+  /evaluation        # RAGAS evaluator, retriever evaluator
+  /configs           # YAML configuration files
+  /utils             # Model cache, shared helpers
+/data
+  /asqa              # ASQA dataset files (train.csv, dev.csv, labeled_asqa.csv)
+/models              # Saved model checkpoints (e.g., models/answer_filter/)
+/results             # Experiment outputs (predictions CSV, metrics JSON)
+/notebooks           # Exploration, training, and analysis notebooks
+/tests               # Unit tests mirroring /src structure
 ```
-
-- Each folder = one RAG pipeline stage
-- Filtering logic lives ONLY in `/src/filtering`
-- Experimental code goes in `/experiments`, never in `/src`
-- Reusable logic goes in `/src`, never in notebooks
 
 ## Pipeline Flow
 
 ```
-ingest → preprocess → embed → retrieve → filter → rank → generate
+retrieve → generate → filter (answer quality) → accept/reject
 ```
 
-Each step must be independent, testable, and replaceable.
+- Filtering operates AFTER generation, on (question, answer) pairs
+- Each stage is independent, testable, and replaceable
+- Filtering logic lives ONLY in `/src/filtering/`
+- Reusable logic goes in `/src/`, never in notebooks
+- Experimental code and visualizations go in `/notebooks/`

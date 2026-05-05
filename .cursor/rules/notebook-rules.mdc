@@ -6,45 +6,44 @@ alwaysApply: false
 
 # Notebook Rules
 
-Notebooks are for **exploration, visualization, and quick experiments only**.
+Notebooks are for **exploration, visualization, training experiments, and analysis only**.
 
 ## Code Separation (CRITICAL)
 
-- If code is reused more than once → move to `/src`
-- If code is longer than ~30-50 lines → move to `/src`
+- If code is reused more than once -> move to `/src/filtering/`
+- If code is longer than ~30-50 lines -> move to `/src/`
 - Notebooks IMPORT from `/src`, never define core logic
 
 ```python
 # BAD - defining logic inside notebook
-def semantic_filter(docs, query, threshold=0.6):
-    ...  # 50+ lines of logic
+def train_model(df, model_name, epochs):
+    ...  # 100+ lines of training logic
 
 # GOOD - importing from src
-from src.filtering.semantic_filter import SemanticFilter
-filter = SemanticFilter(config)
-results = filter.filter(documents, query)
+from src.filtering.learned_filter import train_classifier, AnswerQualityClassifier
+from src.filtering.data_split import load_and_split
+from src.filtering.filter_evaluator import FilterEvaluator
+
+train_df, val_df, test_df = load_and_split("data/asqa/labeled_asqa.csv")
+model = train_classifier(train_df, val_df, output_dir="models/answer_filter")
 ```
 
 ## Structure
 
-Each notebook must have: Title, Objective, Dataset description, Step-by-step sections, Conclusion.
+Each notebook must have: Title, Objective, Dataset description, Step-by-step sections, Results/Conclusion.
 
-## Organization
+## Key Notebooks
 
-```
-/notebooks
-  /exploration     # data exploration
-  /experiments     # quick experiments
-  /visualization   # plots and analysis
-```
+- `notebooks/filter_training.ipynb` -- Main experiment: data split, train, evaluate, compare, error analysis
+- `notebooks/rag-asqa-baseline.ipynb` -- Existing baseline RAG pipeline
 
 ## Naming
 
-Use descriptive names: `rag_filtering_baseline.ipynb`, `threshold_analysis.ipynb`
-Avoid: `test.ipynb`, `final.ipynb`, `new_new.ipynb`
+Use descriptive names: `filter_training.ipynb`, `threshold_analysis.ipynb`, `error_analysis.ipynb`
+Avoid: `test.ipynb`, `final.ipynb`, `untitled.ipynb`
 
 ## Reproducibility
 
-- Fix random seeds. Load configs from `/src/configs/`.
+- Fix random seeds (seed=42). Load configs from `/src/configs/`.
 - Do NOT hardcode paths or parameters.
-- Save results to `/evaluation/results/`.
+- Save results to `/results/`.
