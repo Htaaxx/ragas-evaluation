@@ -62,7 +62,7 @@ class NLIAnswerFilter:
         cfg = _load_nli_filter_config()
         self.model_name = model_name or cfg.get(
             "model_name",
-            "microsoft/deberta-v3-base-mnli-fever-anli",
+            "cross-encoder/nli-deberta-v3-small",
         )
         self.threshold = (
             threshold if threshold is not None
