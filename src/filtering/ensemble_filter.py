@@ -3,7 +3,8 @@ Ensemble answer quality filter combining multiple black-box signals.
 
 Extracts features from (question, answer) pairs using a learned
 DeBERTa classifier, an NLI model, and lexical heuristics, then
-combines them via a lightweight meta-classifier (logistic regression).
+combines them via a lightweight meta-classifier
+(HistGradientBoostingClassifier).
 
 Operates as a black-box: no context or ground truth at inference.
 """
@@ -19,14 +20,13 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import yaml
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
     precision_score,
     recall_score,
 )
-from sklearn.preprocessing import StandardScaler
 
 from .data_models import FilterDecision
 
@@ -77,6 +77,33 @@ def _char_features(answer: str) -> Dict[str, float]:
             float(np.mean([len(w) for w in words])) if words else 0.0
         ),
     }
+
+
+def _coerce_finite_confidences(
+    values: List[float],
+    source: str,
+) -> List[float]:
+    """Convert confidence list to finite floats, mapping inf/-inf to NaN."""
+    cleaned: List[float] = []
+    bad_indices: List[int] = []
+
+    for i, v in enumerate(values):
+        fv = float(v)
+        if not np.isfinite(fv):
+            bad_indices.append(i)
+            fv = np.nan
+        cleaned.append(fv)
+
+    if bad_indices:
+        preview = bad_indices[:10]
+        logger.warning(
+            "%s produced non-finite confidences at indices %s%s; replaced with NaN",
+            source,
+            preview,
+            "..." if len(bad_indices) > len(preview) else "",
+        )
+
+    return cleaned
 
 
 @dataclass
@@ -145,10 +172,10 @@ class EnsembleFilter:
         )
         self.deberta_clf = deberta_clf
         self.nli_filter = nli_filter
-        self.scaler = StandardScaler()
-        self.meta_clf = LogisticRegression(
-            C=cfg.get("regularization_C", 1.0),
+        self.meta_clf = HistGradientBoostingClassifier(
+            learning_rate=cfg.get("learning_rate", 0.1),
             max_iter=cfg.get("max_iter", 1000),
+            max_leaf_nodes=cfg.get("max_leaf_nodes", 31),
             random_state=cfg.get("seed", 42),
         )
         self._is_fitted = False
@@ -162,12 +189,18 @@ class EnsembleFilter:
         deberta_confs = [0.0] * len(questions)
         if self.deberta_clf is not None:
             decisions = self.deberta_clf.predict_batch(questions, answers)
-            deberta_confs = [d.confidence for d in decisions]
+            deberta_confs = _coerce_finite_confidences(
+                [d.confidence for d in decisions],
+                source="deberta_clf",
+            )
 
         nli_confs = [0.0] * len(questions)
         if self.nli_filter is not None:
             decisions = self.nli_filter.predict_batch(questions, answers)
-            nli_confs = [d.confidence for d in decisions]
+            nli_confs = _coerce_finite_confidences(
+                [d.confidence for d in decisions],
+                source="nli_filter",
+            )
 
         rows: List[np.ndarray] = []
         for i, (q, a) in enumerate(zip(questions, answers)):
@@ -180,7 +213,20 @@ class EnsembleFilter:
             )
             rows.append(fv.to_array())
 
-        return np.vstack(rows)
+        X = np.vstack(rows)
+        if not np.isfinite(X).all():
+            bad = np.argwhere(~np.isfinite(X))
+            bad_rows = sorted({int(r) for r, _ in bad})
+            bad_cols = sorted({int(c) for _, c in bad})
+            logger.warning(
+                "Non-finite values in ensemble features. rows=%s cols=%s names=%s",
+                bad_rows[:10],
+                bad_cols,
+                [FeatureVector.feature_names()[c] for c in bad_cols],
+            )
+            # HistGradientBoostingClassifier supports NaN natively.
+            X = np.where(np.isinf(X), np.nan, X)
+        return X
 
     def fit(
         self,
@@ -196,11 +242,10 @@ class EnsembleFilter:
         X = self._extract_features_batch(questions, answers)
         y = np.array(labels)
 
-        X_scaled = self.scaler.fit_transform(X)
-        self.meta_clf.fit(X_scaled, y)
+        self.meta_clf.fit(X, y)
         self._is_fitted = True
 
-        preds = self.meta_clf.predict(X_scaled)
+        preds = self.meta_clf.predict(X)
         metrics = {
             "train_accuracy": accuracy_score(y, preds),
             "train_f1": f1_score(y, preds, zero_division=0),
@@ -216,8 +261,7 @@ class EnsembleFilter:
             raise RuntimeError("EnsembleFilter has not been fitted yet.")
 
         X = self._extract_features_batch([question], [answer])
-        X_scaled = self.scaler.transform(X)
-        prob = self.meta_clf.predict_proba(X_scaled)[0, 1]
+        prob = self.meta_clf.predict_proba(X)[0, 1]
 
         return FilterDecision(
             accept=prob >= self.threshold,
@@ -235,8 +279,7 @@ class EnsembleFilter:
             raise RuntimeError("EnsembleFilter has not been fitted yet.")
 
         X = self._extract_features_batch(questions, answers)
-        X_scaled = self.scaler.transform(X)
-        probs = self.meta_clf.predict_proba(X_scaled)[:, 1]
+        probs = self.meta_clf.predict_proba(X)[:, 1]
 
         decisions: List[FilterDecision] = []
         for prob in probs:
@@ -251,20 +294,16 @@ class EnsembleFilter:
         return decisions
 
     def save(self, path: str | Path) -> None:
-        """Persist the fitted scaler and meta-classifier."""
+        """Persist the fitted meta-classifier."""
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        with open(path / "ensemble_scaler.pkl", "wb") as f:
-            pickle.dump(self.scaler, f)
         with open(path / "ensemble_meta_clf.pkl", "wb") as f:
             pickle.dump(self.meta_clf, f)
         logger.info("Ensemble filter saved to %s", path)
 
     def load(self, path: str | Path) -> None:
-        """Load a previously fitted scaler and meta-classifier."""
+        """Load a previously fitted meta-classifier."""
         path = Path(path)
-        with open(path / "ensemble_scaler.pkl", "rb") as f:
-            self.scaler = pickle.load(f)  # noqa: S301
         with open(path / "ensemble_meta_clf.pkl", "rb") as f:
             self.meta_clf = pickle.load(f)  # noqa: S301
         self._is_fitted = True
