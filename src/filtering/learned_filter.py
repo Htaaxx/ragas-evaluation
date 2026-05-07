@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -21,11 +20,17 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 from torch.utils.data import Dataset
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
@@ -35,7 +40,9 @@ from .data_models import FilterDecision
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "filtering.yaml"
+_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "configs" / "filtering.yaml"
+)
 
 
 def _load_learned_filter_config() -> dict:
@@ -46,11 +53,16 @@ def _load_learned_filter_config() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# HuggingFace Dataset wrapper
+# HuggingFace Dataset wrapper (lazy tokenization for dynamic padding)
 # ---------------------------------------------------------------------------
 
 class _QADataset(Dataset):
-    """Tokenised (question, answer) pairs with binary labels."""
+    """(question, answer) pairs with binary labels.
+
+    Tokenisation happens per-item in ``__getitem__`` so the
+    ``DataCollatorWithPadding`` can pad each batch to its actual
+    max length instead of a fixed 512.
+    """
 
     def __init__(
         self,
@@ -60,23 +72,24 @@ class _QADataset(Dataset):
         tokenizer: AutoTokenizer,
         max_length: int = 512,
     ) -> None:
-        self.encodings = tokenizer(
-            list(questions),
-            list(answers),
-            truncation=True,
-            padding="max_length",
-            max_length=max_length,
-            return_tensors="pt",
-        )
-        self.labels = torch.tensor(list(labels), dtype=torch.long)
+        self.questions = list(questions)
+        self.answers = list(answers)
+        self.labels = list(labels)
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
     def __len__(self) -> int:
         return len(self.labels)
 
     def __getitem__(self, idx: int) -> dict:
-        item = {k: v[idx] for k, v in self.encodings.items()}
-        item["labels"] = self.labels[idx]
-        return item
+        encoding = self.tokenizer(
+            self.questions[idx],
+            self.answers[idx],
+            truncation=True,
+            max_length=self.max_length,
+        )
+        encoding["labels"] = self.labels[idx]
+        return encoding
 
 
 # ---------------------------------------------------------------------------
@@ -219,15 +232,20 @@ def train_classifier(
 
     max_length: int = cfg.get("max_length", 512)
     batch_size: int = cfg.get("batch_size", 16)
-    num_epochs: int = cfg.get("num_epochs", 3)
-    learning_rate: float = cfg.get("learning_rate", 2e-5)
-    warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
+    num_epochs: int = cfg.get("num_epochs", 5)
+    learning_rate: float = cfg.get("learning_rate", 1e-5)
+    warmup_ratio: float = cfg.get("warmup_ratio", 0.2)
     weight_decay: float = cfg.get("weight_decay", 0.01)
+    max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
+    label_smoothing: float = cfg.get("label_smoothing", 0.1)
     seed: int = cfg.get("seed", 42)
 
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
     logger.info("Model: %s  ->  %s", model_name, output_path)
-    logger.info("Train samples: %d  Val samples: %d", len(train_df), len(val_df))
+    logger.info(
+        "Train samples: %d  Val samples: %d",
+        len(train_df), len(val_df),
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -249,6 +267,11 @@ def train_classifier(
         max_length=max_length,
     )
 
+    data_collator = DataCollatorWithPadding(
+        tokenizer=tokenizer,
+        padding=True,
+    )
+
     training_args = TrainingArguments(
         output_dir=str(output_path / "checkpoints"),
         num_train_epochs=num_epochs,
@@ -258,9 +281,11 @@ def train_classifier(
         learning_rate=learning_rate,
         warmup_ratio=warmup_ratio,
         weight_decay=weight_decay,
+        max_grad_norm=max_grad_norm,
+        label_smoothing_factor=label_smoothing,
         eval_strategy="epoch",
         save_strategy="epoch",
-        logging_strategy="epoch",
+        logging_steps=50,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
@@ -275,11 +300,14 @@ def train_classifier(
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
+        data_collator=data_collator,
         compute_metrics=_compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
+        callbacks=[
+            EarlyStoppingCallback(early_stopping_patience=2),
+        ],
     )
 
-    logger.info("Starting training …")
+    logger.info("Starting training ...")
     train_result = trainer.train()
 
     trainer.save_model(str(output_path))
@@ -292,7 +320,8 @@ def train_classifier(
         "train_samples": len(train_df),
         "val_samples": len(val_df),
         "train_metrics": {
-            k: round(v, 6) for k, v in train_result.metrics.items()
+            k: round(v, 6)
+            for k, v in train_result.metrics.items()
         },
     }
 

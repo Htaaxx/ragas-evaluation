@@ -64,7 +64,6 @@ def ablation_data_size(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd
         train_classifier(
             subset, val_df,
             output_dir=str(out_dir),
-            config_overrides={"batch_size": 4},
         )
 
         clf = AnswerQualityClassifier(str(out_dir))
@@ -95,7 +94,7 @@ def ablation_max_length(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: p
         train_classifier(
             train_df, val_df,
             output_dir=str(out_dir),
-            config_overrides={"batch_size": 4, "max_length": ml},
+            config_overrides={"max_length": ml},
         )
 
         clf = AnswerQualityClassifier(str(out_dir))

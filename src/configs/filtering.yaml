@@ -20,7 +20,20 @@ learned_filter:
   max_length: 512
   batch_size: 16
   num_epochs: 5
-  learning_rate: 2.0e-5
-  warmup_ratio: 0.1
+  learning_rate: 1.0e-5
+  warmup_ratio: 0.2
   weight_decay: 0.01
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+  seed: 42
+
+nli_filter:
+  model_name: "microsoft/deberta-v3-base-mnli-fever-anli"
+  threshold: 0.5
+  max_length: 512
+
+ensemble_filter:
+  threshold: 0.5
+  regularization_C: 1.0
+  max_iter: 1000
   seed: 42

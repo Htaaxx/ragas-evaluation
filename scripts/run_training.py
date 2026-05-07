@@ -19,13 +19,10 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     train_df, val_df, test_df = load_and_split("data/asqa/labeled_asqa.csv")
 
-    logger.info("Starting classifier training …")
+    logger.info("Starting classifier training ...")
     model_path = train_classifier(
         train_df=train_df,
         val_df=val_df,
-        config_overrides={
-            "batch_size": 4,
-        },
     )
     logger.info("Training complete. Model saved to %s", model_path)
 
