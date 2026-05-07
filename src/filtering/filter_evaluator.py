@@ -14,7 +14,20 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Sequence
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
+
+
+def _to_python_type(value):
+    """Convert NumPy scalar types to native Python types."""
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return value
 
 
 @dataclass
@@ -34,13 +47,18 @@ class FilterResult:
     fn: int
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            k: _to_python_type(v)
+            for k, v in asdict(self).items()
+        }
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=2)
+
         logger.info("Filter results saved to %s", path)
 
 
@@ -64,19 +82,7 @@ class FilterEvaluator:
         predictions: Sequence[bool],
         labels: Sequence[int],
     ) -> FilterResult:
-        """Compute all six filtering metrics.
-
-        Parameters
-        ----------
-        predictions:
-            Per-sample accept (True) / reject (False) decisions.
-        labels:
-            Ground-truth labels (1 = correct, 0 = hallucinated).
-
-        Returns
-        -------
-        FilterResult with all metrics filled in.
-        """
+        """Compute all six filtering metrics."""
         if len(predictions) != len(labels):
             raise ValueError(
                 f"Length mismatch: {len(predictions)} predictions vs "
@@ -89,29 +95,35 @@ class FilterEvaluator:
         fn = sum(not p and l == 1 for p, l in zip(predictions, labels))
 
         n = len(labels)
+
         precision = _safe_div(tp, tp + fp)
         recall = _safe_div(tp, tp + fn)
         f1 = _safe_div(2 * precision * recall, precision + recall)
         accuracy = _safe_div(tp + tn, n)
+
         rejection_precision = _safe_div(tn, tn + fn)
         rejection_recall = _safe_div(tn, tn + fp)
         rejection_rate = _safe_div(tn + fn, n)
 
         result = FilterResult(
-            precision=precision,
-            recall=recall,
-            f1=f1,
-            accuracy=accuracy,
-            rejection_precision=rejection_precision,
-            rejection_recall=rejection_recall,
-            rejection_rate=rejection_rate,
-            tp=tp, tn=tn, fp=fp, fn=fn,
+            precision=float(precision),
+            recall=float(recall),
+            f1=float(f1),
+            accuracy=float(accuracy),
+            rejection_precision=float(rejection_precision),
+            rejection_recall=float(rejection_recall),
+            rejection_rate=float(rejection_rate),
+            tp=int(tp),
+            tn=int(tn),
+            fp=int(fp),
+            fn=int(fn),
         )
 
         logger.info(
             "Evaluation (n=%d): P=%.3f R=%.3f F1=%.3f Acc=%.3f RejR=%.3f",
             n, precision, recall, f1, accuracy, rejection_rate,
         )
+
         return result
 
     def compute_no_filter_baseline(
@@ -127,20 +139,9 @@ class FilterEvaluator:
         results: dict[str, FilterResult],
         save_path: str | Path | None = None,
     ) -> List[dict]:
-        """Build a comparison table from named FilterResults.
-
-        Parameters
-        ----------
-        results:
-            Mapping of strategy name to its ``FilterResult``.
-        save_path:
-            Optional path to persist the comparison as JSON.
-
-        Returns
-        -------
-        List of dicts (one per strategy), suitable for ``pd.DataFrame``.
-        """
+        """Build a comparison table from named FilterResults."""
         rows = []
+
         for name, fr in results.items():
             row = {"strategy": name, **fr.to_dict()}
             rows.append(row)
@@ -148,8 +149,10 @@ class FilterEvaluator:
         if save_path is not None:
             save_path = Path(save_path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
+
             with open(save_path, "w", encoding="utf-8") as fh:
                 json.dump(rows, fh, indent=2)
+
             logger.info("Comparison table saved to %s", save_path)
 
         return rows
