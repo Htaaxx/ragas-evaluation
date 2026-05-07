@@ -19,7 +19,7 @@ learned_filter:
   threshold: 0.5
   max_length: 512
   batch_size: 16
-  num_epochs: 3
+  num_epochs: 5
   learning_rate: 2.0e-5
   warmup_ratio: 0.1
   weight_decay: 0.01

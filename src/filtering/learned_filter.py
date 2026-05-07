@@ -254,6 +254,7 @@ def train_classifier(
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size * 2,
+        gradient_accumulation_steps=max(1, 16 // batch_size),
         learning_rate=learning_rate,
         warmup_ratio=warmup_ratio,
         weight_decay=weight_decay,
@@ -265,7 +266,7 @@ def train_classifier(
         greater_is_better=True,
         save_total_limit=2,
         seed=seed,
-        fp16=False, # DeBERTa-v3-small is small enough to train on CPU if needed
+        fp16=False,
         report_to="none",
     )
 
