@@ -1,0 +1,44 @@
+[
+  {
+    "strategy": "No Filter",
+    "precision": 0.5,
+    "recall": 1.0,
+    "f1": 0.6666666666666666,
+    "accuracy": 0.5,
+    "rejection_precision": 0.0,
+    "rejection_recall": 0.0,
+    "rejection_rate": 0.0,
+    "tp": 871,
+    "tn": 0,
+    "fp": 871,
+    "fn": 0
+  },
+  {
+    "strategy": "Learned Filter",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "accuracy": 0.5,
+    "rejection_precision": 0.5,
+    "rejection_recall": 1.0,
+    "rejection_rate": 1.0,
+    "tp": 0,
+    "tn": 871,
+    "fp": 0,
+    "fn": 871
+  },
+  {
+    "strategy": "NLI Zero-Shot",
+    "precision": 0.56,
+    "recall": 0.016073478760045924,
+    "f1": 0.03125,
+    "accuracy": 0.5017221584385764,
+    "rejection_precision": 0.500873616773442,
+    "rejection_recall": 0.9873708381171068,
+    "rejection_rate": 0.9856486796785304,
+    "tp": 14,
+    "tn": 860,
+    "fp": 11,
+    "fn": 857
+  }
+]
