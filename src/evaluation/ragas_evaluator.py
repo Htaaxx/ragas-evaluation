@@ -30,6 +30,7 @@ import os
 from typing import Dict, List, Optional
 
 import pandas as pd
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,29 @@ except ImportError:
         "pip install ragas langchain-openai datasets"
     )
 
+
+class CheckpointedEvaluationResult:
+
+    def __init__(self, df):
+        self.df = df
+
+        self.summary = {
+            col: df[col].mean()
+            for col in df.columns
+            if col not in ["sample_idx", "question", "answer", "contexts", "ground_truth"]
+        }
+
+    def to_pandas(self):
+        return self.df
+
+    def __getitem__(self, item):
+        return self.summary[item]
+
+    def keys(self):
+        return self.summary.keys()
+
+    def __repr__(self):
+        return str(self.summary)
 
 # ============================================================
 # MAIN CLASS
@@ -380,6 +404,141 @@ class RAGASEvaluator:
             })
 
         return pd.DataFrame(comparison)
+    
+    # =======================================================
+        # CHECKPOINT EVALUATION
+    # ========================================================
+
+    def evaluate_checkpoint(
+        self,
+        questions: List[str],
+        answers: List[str],
+        contexts: Optional[List[List[str]]] = None,
+        ground_truths: Optional[List[str]] = None,
+        batch_size: int = 10,
+        save_path: str = "ragas_checkpoint.csv",
+        show_progress: bool = True,
+    ) -> pd.DataFrame:
+
+        save_path = Path(save_path)
+
+        all_results = []
+        start_idx = 0
+
+        if save_path.exists():
+            checkpoint_df = pd.read_csv(save_path)
+            all_results = checkpoint_df.to_dict("records")
+            start_idx = len(checkpoint_df)
+
+            print(f"Resuming from sample {start_idx}")
+
+        n = len(questions)
+
+        if contexts is None:
+            contexts = [[] for _ in questions]
+
+        for start in range(start_idx, n, batch_size):
+            end = min(start + batch_size, n)
+
+            batch_questions = questions[start:end]
+            batch_answers = answers[start:end]
+            batch_contexts = contexts[start:end]
+
+            batch_ground_truths = (
+                ground_truths[start:end]
+                if ground_truths is not None
+                else None
+            )
+
+            result = self.evaluate(
+                questions=batch_questions,
+                answers=batch_answers,
+                contexts=batch_contexts,
+                ground_truths=batch_ground_truths,
+                show_progress=show_progress,
+            )
+
+            result_df = result.to_pandas()
+
+            # giữ lại index gốc để biết sample nào
+            result_df.insert(0, "sample_idx", range(start, end))
+
+            all_results.extend(result_df.to_dict("records"))
+
+            pd.DataFrame(all_results).to_csv(
+                save_path,
+                index=False,
+            )
+
+            print(f"Saved checkpoint: {end}/{n}")
+        
+        final_df = pd.DataFrame(all_results)
+
+        return CheckpointedEvaluationResult(final_df)
+
+
+    def evaluate_from_dataframe_checkpoint(
+        self,
+        df: pd.DataFrame,
+        question_col: str = "question",
+        answer_col: str = "predicted_answer",
+        contexts_col: Optional[str] = "contexts",
+        ground_truth_col: Optional[str] = "gold_answer",
+        batch_size: int = 10,
+        save_path: str = "ragas_df_checkpoint.csv",
+        show_progress: bool = True,
+    ) -> pd.DataFrame:
+
+        questions = (
+            df[question_col]
+            .fillna("")
+            .astype(str)
+            .tolist()
+        )
+
+        answers = (
+            df[answer_col]
+            .fillna("")
+            .astype(str)
+            .tolist()
+        )
+
+        contexts = None
+
+        if contexts_col and contexts_col in df.columns:
+            contexts = []
+
+            for ctx in df[contexts_col]:
+                if isinstance(ctx, str):
+                    try:
+                        ctx = ast.literal_eval(ctx)
+                    except Exception:
+                        ctx = [ctx]
+
+                elif not isinstance(ctx, list):
+                    ctx = [str(ctx)]
+
+                contexts.append(ctx)
+
+        ground_truths = None
+
+        if ground_truth_col and ground_truth_col in df.columns:
+            ground_truths = (
+                df[ground_truth_col]
+                .fillna("")
+                .astype(str)
+                .tolist()
+            )
+
+        return self.evaluate_checkpoint(
+            questions=questions,
+            answers=answers,
+            contexts=contexts,
+            ground_truths=ground_truths,
+            batch_size=batch_size,
+            save_path=save_path,
+            show_progress=show_progress,
+        )
 
 
 # ============================================================

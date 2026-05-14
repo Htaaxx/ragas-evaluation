@@ -21,8 +21,11 @@ import re
 import string
 from collections import Counter
 from typing import Dict, List, Optional
+from transformers import AutoTokenizer
 
 import pandas as pd
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,8 @@ try:
     BERTSCORE_AVAILABLE = True
 except ImportError:
     BERTSCORE_AVAILABLE = False
+
+
 
 
 # =========================================================
@@ -92,6 +97,17 @@ def exact_match(prediction: str, ground_truth: str) -> float:
     )
 
 
+def truncate_text(text, tokenizer, max_tokens=256):
+    text = "" if text is None else str(text)
+    ids = tokenizer.encode(
+        text,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=max_tokens,
+    )
+    return tokenizer.decode(ids, skip_special_tokens=True)
+
+
 # =========================================================
 # Evaluator
 # =========================================================
@@ -123,6 +139,7 @@ class TraditionalEvaluator:
 
         self.metrics = metrics
         self.bert_model = bert_model
+    
 
     # =====================================================
     # Metric functions
@@ -162,12 +179,31 @@ class TraditionalEvaluator:
         if not BERTSCORE_AVAILABLE:
             raise ImportError("bert-score not installed")
 
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.bert_model
+        )
+
+        # ========================================================
+        # SAFE TRUNCATION
+        # ========================================================
+
+        preds = [
+            truncate_text(x, tokenizer)
+            for x in preds
+        ]
+
+        gts = [
+            truncate_text(x, tokenizer)
+            for x in gts
+        ]
+
         P, R, F1 = bertscore_score(
             preds,
             gts,
             lang="en",
             model_type=self.bert_model,
             verbose=False,
+            batch_size=16
         )
 
         return {
@@ -231,12 +267,24 @@ class TraditionalEvaluator:
 
         if "bertscore" in self.metrics:
 
+            tokenizer = AutoTokenizer.from_pretrained(self.bert_model)
+
+            preds = [
+                truncate_text(x, tokenizer)
+                for x in predictions
+            ]
+            gts = [
+                truncate_text(x, tokenizer)
+                for x in references
+            ]
+
             _, _, F1 = bertscore_score(
-                predictions,
-                references,
+                preds,
+                gts,
                 lang="en",
                 model_type=self.bert_model,
                 verbose=False,
+                batch_size=16
             )
 
             bert_f1 = F1.tolist()
