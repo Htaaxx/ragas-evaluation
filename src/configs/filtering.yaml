@@ -19,12 +19,15 @@ learned_filter:
   threshold: 0.5
   max_length: 512
   batch_size: 16
-  num_epochs: 5
-  learning_rate: 1.0e-5
-  warmup_ratio: 0.2
+  num_epochs: 10
+  learning_rate: 2.0e-5
+  warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
-  label_smoothing: 0.1
+  label_smoothing: 0.0
+  early_stopping_patience: 3
+  fp16: true
+  save_total_limit: 3
   seed: 42
 
 nli_filter:

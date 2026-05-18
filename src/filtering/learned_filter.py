@@ -52,6 +52,34 @@ def _load_learned_filter_config() -> dict:
     return cfg.get("learned_filter", {})
 
 
+def _fix_deberta_layernorm_keys(model) -> None:
+    """Fix DeBERTa-v3 LayerNorm key naming mismatch in-place.
+
+    DeBERTa-v3 checkpoints use a custom LayerNorm with ``.gamma``
+    and ``.beta`` attributes instead of standard ``.weight``/``.bias``.
+    This causes key mismatches when HuggingFace Trainer saves and
+    reloads checkpoints. We rename the actual module attributes so
+    that state_dict() consistently uses ``.weight``/``.bias``.
+    """
+    fixed_count = 0
+    for module in model.modules():
+        if hasattr(module, "gamma") and not hasattr(module, "weight"):
+            module.weight = module.gamma
+            del module.gamma
+            fixed_count += 1
+        if hasattr(module, "beta") and not hasattr(module, "bias"):
+            module.bias = module.beta
+            del module.beta
+            fixed_count += 1
+
+    if fixed_count > 0:
+        logger.info(
+            "Fixed %d DeBERTa LayerNorm attributes "
+            "(.beta/.gamma -> .weight/.bias)",
+            fixed_count,
+        )
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace Dataset wrapper (lazy tokenization for dynamic padding)
 # ---------------------------------------------------------------------------
@@ -118,6 +146,7 @@ class AnswerQualityClassifier:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        _fix_deberta_layernorm_keys(self.model)
         self.model.to(self.device)
         self.model.eval()
 
@@ -232,12 +261,15 @@ def train_classifier(
 
     max_length: int = cfg.get("max_length", 512)
     batch_size: int = cfg.get("batch_size", 16)
-    num_epochs: int = cfg.get("num_epochs", 5)
-    learning_rate: float = cfg.get("learning_rate", 1e-5)
-    warmup_ratio: float = cfg.get("warmup_ratio", 0.2)
+    num_epochs: int = cfg.get("num_epochs", 10)
+    learning_rate: float = cfg.get("learning_rate", 2e-5)
+    warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
-    label_smoothing: float = cfg.get("label_smoothing", 0.1)
+    label_smoothing: float = cfg.get("label_smoothing", 0.0)
+    early_stopping_patience: int = cfg.get("early_stopping_patience", 3)
+    use_fp16: bool = cfg.get("fp16", True)
+    save_total_limit: int = cfg.get("save_total_limit", 3)
     seed: int = cfg.get("seed", 42)
 
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
@@ -251,6 +283,7 @@ def train_classifier(
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name, num_labels=2,
     )
+    _fix_deberta_layernorm_keys(model)
 
     train_dataset = _QADataset(
         train_df["question"].tolist(),
@@ -289,9 +322,9 @@ def train_classifier(
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
-        save_total_limit=2,
+        save_total_limit=save_total_limit,
         seed=seed,
-        fp16=False,
+        fp16=use_fp16,
         report_to="none",
     )
 
@@ -303,7 +336,9 @@ def train_classifier(
         data_collator=data_collator,
         compute_metrics=_compute_metrics,
         callbacks=[
-            EarlyStoppingCallback(early_stopping_patience=2),
+            EarlyStoppingCallback(
+                early_stopping_patience=early_stopping_patience,
+            ),
         ],
     )
 
