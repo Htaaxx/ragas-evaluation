@@ -54,63 +54,67 @@ def _load_learned_filter_config() -> dict:
 
 
 def _fix_deberta_layernorm_keys(model) -> None:
-    """Fix DeBERTa-v3 LayerNorm key naming mismatch in-place.
+    """Replace DebertaV2LayerNorm with standard nn.LayerNorm in-place.
 
-    DeBERTa-v3 checkpoints use a custom LayerNorm with ``.gamma``
-    and ``.beta`` registered as nn.Parameters, but HuggingFace Trainer
-    expects ``.weight``/``.bias`` when saving/loading checkpoints.
-
-    On some transformers versions, ``.weight`` exists as a property
-    alias while ``.gamma`` is the actual registered Parameter. We must
-    check ``_parameters`` directly to determine the real registered name.
+    DebertaV2LayerNorm uses .gamma/.beta naming that causes checkpoint
+    save/reload mismatches with HuggingFace Trainer. Replacing with
+    standard nn.LayerNorm (which uses .weight/.bias) fixes this entirely.
     """
     import torch.nn as nn
 
-    fixed_count = 0
-    for module in model.modules():
-        # Check the actual registered parameter names, not attributes
-        params = dict(module._parameters)
+    replacements = []
+    for name, module in model.named_modules():
+        class_name = type(module).__name__
+        if "LayerNorm" in class_name and class_name != "LayerNorm":
+            # Get weight data from whichever attribute exists
+            if hasattr(module, "gamma") and module.gamma is not None:
+                weight_data = module.gamma.data.clone()
+            elif hasattr(module, "weight") and module.weight is not None:
+                weight_data = module.weight.data.clone()
+            else:
+                continue
 
-        if "gamma" in params and "weight" not in params:
-            gamma_param = params["gamma"]
-            del module._parameters["gamma"]
-            module._parameters["weight"] = gamma_param
-            # Also fix the attribute for direct access
-            if hasattr(module, "gamma"):
-                try:
-                    delattr(module, "gamma")
-                except AttributeError:
-                    pass
-            module.weight = gamma_param
-            fixed_count += 1
+            if hasattr(module, "beta") and module.beta is not None:
+                bias_data = module.beta.data.clone()
+            elif hasattr(module, "bias") and module.bias is not None:
+                bias_data = module.bias.data.clone()
+            else:
+                bias_data = torch.zeros_like(weight_data)
 
-        if "beta" in params and "bias" not in params:
-            beta_param = params["beta"]
-            del module._parameters["beta"]
-            module._parameters["bias"] = beta_param
-            if hasattr(module, "beta"):
-                try:
-                    delattr(module, "beta")
-                except AttributeError:
-                    pass
-            module.bias = beta_param
-            fixed_count += 1
+            eps = getattr(module, "variance_epsilon",
+                          getattr(module, "eps", 1e-12))
+            replacements.append((name, weight_data, bias_data, eps))
 
-    if fixed_count > 0:
+    # Perform replacements
+    for name, weight_data, bias_data, eps in replacements:
+        new_ln = nn.LayerNorm(weight_data.shape[0], eps=eps)
+        new_ln.weight.data.copy_(weight_data)
+        new_ln.bias.data.copy_(bias_data)
+
+        # Navigate to parent and replace
+        parts = name.split(".")
+        parent = model
+        for part in parts[:-1]:
+            parent = getattr(parent, part)
+        setattr(parent, parts[-1], new_ln)
+
+    if replacements:
         logger.info(
-            "Fixed %d DeBERTa LayerNorm parameters "
-            "(.beta/.gamma -> .weight/.bias) in _parameters registry",
-            fixed_count,
+            "Replaced %d DebertaV2LayerNorm modules with nn.LayerNorm "
+            "(guarantees .weight/.bias naming in state_dict)",
+            len(replacements),
+        )
+
+    # Final verification
+    bad_keys = [k for k in model.state_dict().keys()
+                if k.endswith(".gamma") or k.endswith(".beta")]
+    if bad_keys:
+        logger.error(
+            "STILL found %d .gamma/.beta keys after fix: %s",
+            len(bad_keys), bad_keys[:4],
         )
     else:
-        # Verify state_dict doesn't have .gamma/.beta keys
-        bad_keys = [k for k in model.state_dict().keys()
-                    if k.endswith(".gamma") or k.endswith(".beta")]
-        if bad_keys:
-            logger.warning(
-                "Found %d .gamma/.beta keys in state_dict despite "
-                "fix attempt: %s", len(bad_keys), bad_keys[:4],
-            )
+        logger.info("Verified: state_dict has NO .gamma/.beta keys")
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +328,19 @@ def _compute_metrics(eval_pred) -> Dict[str, float]:
     """Metric callback for HuggingFace Trainer."""
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)
+
+    # Log prediction distribution for debugging
+    pred_counts = {0: int((preds == 0).sum()), 1: int((preds == 1).sum())}
+    label_counts = {0: int((labels == 0).sum()), 1: int((labels == 1).sum())}
+    logits_mean = logits.mean(axis=0).tolist()
+    logits_std = logits.std(axis=0).tolist()
+    logger.info(
+        "EVAL: preds=%s labels=%s logits_mean=%s logits_std=%s",
+        pred_counts, label_counts,
+        [f"{x:.4f}" for x in logits_mean],
+        [f"{x:.4f}" for x in logits_std],
+    )
+
     return {
         "accuracy": accuracy_score(labels, preds),
         "f1": f1_score(labels, preds),
@@ -459,11 +476,23 @@ def train_classifier(
         context_dropout=0.0,
     )
 
-    # Sanity check: verify first batch is valid
-    sample = train_dataset[0]
+    # Sanity check: verify samples and context inclusion
+    for i in range(min(3, len(train_dataset))):
+        sample = train_dataset[i]
+        decoded = tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
+        logger.info(
+            "DIAGNOSTIC sample[%d]: input_ids len=%d, label=%d, "
+            "text_preview='%s'",
+            i, len(sample["input_ids"]), sample["labels"],
+            decoded[:150],
+        )
+
+    # Check if any layers are frozen
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
     logger.info(
-        "DIAGNOSTIC sample[0]: input_ids len=%d, label=%d (type=%s)",
-        len(sample["input_ids"]), sample["labels"], type(sample["labels"]).__name__,
+        "DIAGNOSTIC params: trainable=%d/%d (%.1f%%)",
+        trainable, total, 100 * trainable / total,
     )
 
     data_collator = DataCollatorWithPadding(
