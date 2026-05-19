@@ -21,6 +21,7 @@ learned_filter:
   batch_size: 16
   num_epochs: 10
   learning_rate: 2.0e-5
+  classifier_lr: 1.0e-3
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0

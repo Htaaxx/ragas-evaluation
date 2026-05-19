@@ -85,9 +85,10 @@ def _fix_deberta_layernorm_keys(model) -> None:
                           getattr(module, "eps", 1e-12))
             replacements.append((name, weight_data, bias_data, eps))
 
-    # Perform replacements
+    # Perform replacements (use eps=1e-7 minimum for numerical stability)
     for name, weight_data, bias_data, eps in replacements:
-        new_ln = nn.LayerNorm(weight_data.shape[0], eps=eps)
+        safe_eps = max(eps, 1e-7)
+        new_ln = nn.LayerNorm(weight_data.shape[0], eps=safe_eps)
         new_ln.weight.data.copy_(weight_data)
         new_ln.bias.data.copy_(bias_data)
 
@@ -500,6 +501,28 @@ def train_classifier(
         padding=True,
     )
 
+    # Differential learning rates: higher for classifier head, lower for encoder
+    classifier_lr: float = cfg.get("classifier_lr", 1e-3)
+    classifier_params = []
+    encoder_params = []
+    for name, param in model.named_parameters():
+        if "classifier" in name or "pooler" in name:
+            classifier_params.append(param)
+        else:
+            encoder_params.append(param)
+
+    logger.info(
+        "Optimizer: encoder_lr=%.1e (%d params), classifier_lr=%.1e (%d params)",
+        learning_rate, len(encoder_params),
+        classifier_lr, len(classifier_params),
+    )
+
+    from torch.optim import AdamW
+    optimizer = AdamW([
+        {"params": encoder_params, "lr": learning_rate, "weight_decay": weight_decay},
+        {"params": classifier_params, "lr": classifier_lr, "weight_decay": 0.0},
+    ])
+
     training_args = TrainingArguments(
         output_dir=str(output_path / "checkpoints"),
         num_train_epochs=num_epochs,
@@ -530,6 +553,7 @@ def train_classifier(
         eval_dataset=val_dataset,
         data_collator=data_collator,
         compute_metrics=_compute_metrics,
+        optimizers=(optimizer, None),
         callbacks=[
             EarlyStoppingCallback(
                 early_stopping_patience=early_stopping_patience,
