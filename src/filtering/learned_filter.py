@@ -130,13 +130,16 @@ class _QADataset(Dataset):
         contexts: Sequence[str] | None = None,
         context_dropout: float = 0.0,
     ) -> None:
-        self.questions = list(questions)
-        self.answers = list(answers)
-        self.labels = list(labels)
+        self.questions = [str(q) if q is not None else "" for q in questions]
+        self.answers = [str(a) if a is not None else "" for a in answers]
+        self.labels = [int(lbl) for lbl in labels]
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.contexts = list(contexts) if contexts is not None else None
+        self.contexts = [str(c) if c is not None else "" for c in contexts] if contexts is not None else None
         self.context_dropout = context_dropout
+
+        assert all(lbl in (0, 1) for lbl in self.labels), \
+            f"Labels must be 0 or 1, got unique: {set(self.labels)}"
 
     def __len__(self) -> int:
         return len(self.labels)
@@ -374,6 +377,24 @@ def train_classifier(
     else:
         logger.info("Training WITHOUT context (no-context mode)")
 
+    # --- Pre-training diagnostics ---
+    for name, split in [("train", train_df), ("val", val_df)]:
+        nan_labels = split["label"].isna().sum()
+        nan_q = split["question"].isna().sum()
+        nan_a = split["answer"].isna().sum()
+        label_dist = split["label"].value_counts().to_dict()
+        logger.info(
+            "DIAGNOSTIC [%s]: labels=%s, NaN(label=%d, q=%d, a=%d), "
+            "label_dtype=%s",
+            name, label_dist, nan_labels, nan_q, nan_a,
+            split["label"].dtype,
+        )
+        if nan_labels > 0:
+            raise ValueError(f"{name} has {nan_labels} NaN labels!")
+        if nan_q > 0 or nan_a > 0:
+            logger.warning("%s has NaN text fields! Filling with empty string.", name)
+            split = split.fillna({"question": "", "answer": ""})
+
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
     logger.info("Model: %s  ->  %s", model_name, output_path)
     logger.info(
@@ -390,7 +411,7 @@ def train_classifier(
     train_dataset = _QADataset(
         train_df["question"].tolist(),
         train_df["answer"].tolist(),
-        train_df["label"].tolist(),
+        train_df["label"].astype(int).tolist(),
         tokenizer,
         max_length=max_length,
         contexts=train_contexts,
@@ -399,11 +420,18 @@ def train_classifier(
     val_dataset = _QADataset(
         val_df["question"].tolist(),
         val_df["answer"].tolist(),
-        val_df["label"].tolist(),
+        val_df["label"].astype(int).tolist(),
         tokenizer,
         max_length=max_length,
         contexts=val_contexts,
         context_dropout=0.0,
+    )
+
+    # Sanity check: verify first batch is valid
+    sample = train_dataset[0]
+    logger.info(
+        "DIAGNOSTIC sample[0]: input_ids len=%d, label=%d (type=%s)",
+        len(sample["input_ids"]), sample["labels"], type(sample["labels"]).__name__,
     )
 
     data_collator = DataCollatorWithPadding(
@@ -447,6 +475,28 @@ def train_classifier(
             ),
         ],
     )
+
+    # Pre-flight forward pass to catch NaN before wasting time
+    logger.info("Running pre-flight forward pass...")
+    model.eval()
+    with torch.no_grad():
+        batch = data_collator([train_dataset[i] for i in range(min(4, len(train_dataset)))])
+        batch = {k: v.to(model.device) for k, v in batch.items()}
+        outputs = model(**batch)
+        logger.info(
+            "DIAGNOSTIC pre-flight: loss=%.4f, logits_mean=%.4f, "
+            "logits_std=%.4f, any_nan=%s",
+            outputs.loss.item(),
+            outputs.logits.mean().item(),
+            outputs.logits.std().item(),
+            bool(torch.isnan(outputs.logits).any()),
+        )
+        if torch.isnan(outputs.logits).any():
+            raise RuntimeError(
+                "Model produces NaN logits BEFORE training! "
+                "The model weights are corrupted or incompatible."
+            )
+    model.train()
 
     logger.info("Starting training ...")
     train_result = trainer.train()
