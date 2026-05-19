@@ -14,7 +14,7 @@ reward_filter:
   dataset_type: "universal"
 
 learned_filter:
-  model_name: "microsoft/deberta-v3-small"
+  model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
   model_path: "models/answer_filter"
   threshold: 0.5
   max_length: 512
