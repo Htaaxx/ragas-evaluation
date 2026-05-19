@@ -1,0 +1,5 @@
+Requirement already satisfied: requests in c:\users\vnpq2\anaconda3\envs\ragas-env\lib\site-packages (2.34.1)
+Requirement already satisfied: charset_normalizer<4,>=2 in c:\users\vnpq2\anaconda3\envs\ragas-env\lib\site-packages (from requests) (3.4.7)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\vnpq2\anaconda3\envs\ragas-env\lib\site-packages (from requests) (3.15)
+Requirement already satisfied: urllib3<3,>=1.26 in c:\users\vnpq2\anaconda3\envs\ragas-env\lib\site-packages (from requests) (2.7.0)
+Requirement already satisfied: certifi>=2023.5.7 in c:\users\vnpq2\anaconda3\envs\ragas-env\lib\site-packages (from requests) (2026.4.22)
