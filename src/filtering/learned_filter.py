@@ -3,10 +3,11 @@ Learned answer quality classifier (core thesis component).
 
 Provides:
 - ``AnswerQualityClassifier`` — inference-time accept/reject filter
-  that takes (question, answer) and returns a ``FilterDecision``
-  without requiring ground truth or context.
-- ``train_classifier()`` — fine-tunes DeBERTa-v3-small on
-  ``labeled_asqa.csv`` using HuggingFace Trainer.
+  that takes (question, answer, optional context) and returns a
+  ``FilterDecision``.
+- ``train_classifier()`` — fine-tunes DeBERTa on
+  ``labeled_asqa.csv`` using HuggingFace Trainer. Supports
+  context-aware training with context dropout augmentation.
 """
 
 from __future__ import annotations
@@ -81,15 +82,42 @@ def _fix_deberta_layernorm_keys(model) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Context extraction
+# ---------------------------------------------------------------------------
+
+def _extract_top1_context(context_str: str, max_chars: int = 800) -> str:
+    """Extract top-1 passage from the context dict string.
+
+    The context column in labeled_asqa.csv is a stringified dict with
+    'title' (list) and 'sentences' (list of list of strings). The first
+    title+sentences is the primary source passage.
+    """
+    import ast
+
+    try:
+        ctx = ast.literal_eval(context_str)
+        title = ctx["title"][0]
+        sentences = " ".join(ctx["sentences"][0])
+        passage = f"{title}: {sentences}"
+        return passage[:max_chars]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # HuggingFace Dataset wrapper (lazy tokenization for dynamic padding)
 # ---------------------------------------------------------------------------
 
 class _QADataset(Dataset):
-    """(question, answer) pairs with binary labels.
+    """(question, context, answer) triples with binary labels.
 
-    Tokenisation happens per-item in ``__getitem__`` so the
-    ``DataCollatorWithPadding`` can pad each batch to its actual
-    max length instead of a fixed 512.
+    Input format for tokenizer:
+      text_a = question + " Context: " + context
+      text_b = answer
+
+    This lets the model compare the answer against reference context.
+    Context dropout randomly masks context during training to prevent
+    over-reliance on retrieval.
     """
 
     def __init__(
@@ -98,21 +126,38 @@ class _QADataset(Dataset):
         answers: Sequence[str],
         labels: Sequence[int],
         tokenizer: AutoTokenizer,
-        max_length: int = 512,
+        max_length: int = 384,
+        contexts: Sequence[str] | None = None,
+        context_dropout: float = 0.0,
     ) -> None:
         self.questions = list(questions)
         self.answers = list(answers)
         self.labels = list(labels)
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.contexts = list(contexts) if contexts is not None else None
+        self.context_dropout = context_dropout
 
     def __len__(self) -> int:
         return len(self.labels)
 
     def __getitem__(self, idx: int) -> dict:
+        question = self.questions[idx]
+        answer = self.answers[idx]
+
+        if self.contexts is not None:
+            import random
+            if self.context_dropout > 0 and random.random() < self.context_dropout:
+                text_a = question
+            else:
+                context = self.contexts[idx]
+                text_a = f"{question} Context: {context}"
+        else:
+            text_a = question
+
         encoding = self.tokenizer(
-            self.questions[idx],
-            self.answers[idx],
+            text_a,
+            answer,
             truncation=True,
             max_length=self.max_length,
         )
@@ -125,12 +170,16 @@ class _QADataset(Dataset):
 # ---------------------------------------------------------------------------
 
 class AnswerQualityClassifier:
-    """Learned answer-only filter. No ground truth or context needed.
+    """Learned answer quality filter with optional context.
 
     Usage::
 
         clf = AnswerQualityClassifier("models/answer_filter")
-        decision = clf.predict("When was Python released?", "Python 3.0 was released in 2008.")
+        decision = clf.predict(
+            "When was Python released?",
+            "Python 3.0 was released in 2008.",
+            context="Python: Python 3.0 was released on December 3, 2008.",
+        )
         print(decision.accept, decision.confidence)
     """
 
@@ -150,16 +199,28 @@ class AnswerQualityClassifier:
         self.model.to(self.device)
         self.model.eval()
 
-        self.max_length: int = cfg.get("max_length", 512)
+        self.max_length: int = cfg.get("max_length", 384)
         logger.info(
             "AnswerQualityClassifier loaded from %s (threshold=%.2f, device=%s)",
             model_path, self.threshold, self.device,
         )
 
-    def predict(self, question: str, answer: str) -> FilterDecision:
-        """Score a single (question, answer) pair."""
+    def _build_text_a(self, question: str, context: str | None = None) -> str:
+        """Build text_a: question + optional context."""
+        if context:
+            return f"{question} Context: {context}"
+        return question
+
+    def predict(
+        self,
+        question: str,
+        answer: str,
+        context: str | None = None,
+    ) -> FilterDecision:
+        """Score a single (question, answer) pair with optional context."""
+        text_a = self._build_text_a(question, context)
         inputs = self.tokenizer(
-            question, answer,
+            text_a, answer,
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -179,17 +240,27 @@ class AnswerQualityClassifier:
         self,
         questions: List[str],
         answers: List[str],
+        contexts: List[str] | None = None,
         batch_size: int = 32,
     ) -> List[FilterDecision]:
-        """Score a batch of (question, answer) pairs."""
+        """Score a batch of (question, answer) pairs with optional contexts."""
         decisions: List[FilterDecision] = []
 
         for start in range(0, len(questions), batch_size):
             batch_q = questions[start : start + batch_size]
             batch_a = answers[start : start + batch_size]
 
+            if contexts is not None:
+                batch_c = contexts[start : start + batch_size]
+                batch_text_a = [
+                    self._build_text_a(q, c)
+                    for q, c in zip(batch_q, batch_c)
+                ]
+            else:
+                batch_text_a = batch_q
+
             inputs = self.tokenizer(
-                batch_q, batch_a,
+                batch_text_a, batch_a,
                 return_tensors="pt",
                 truncation=True,
                 padding=True,
@@ -232,19 +303,29 @@ def train_classifier(
     model_name: str | None = None,
     output_dir: str | None = None,
     config_overrides: dict | None = None,
+    use_context: bool = True,
+    context_dropout: float = 0.15,
 ) -> Path:
     """Fine-tune a DeBERTa classifier on labeled answer-quality data.
 
     Parameters
     ----------
     train_df / val_df:
-        DataFrames with columns ``question``, ``answer``, ``label``.
+        DataFrames with columns ``question``, ``answer``, ``label``,
+        and optionally ``context`` (raw string from labeled_asqa.csv).
     model_name:
         HuggingFace model ID. Defaults to ``filtering.yaml`` value.
     output_dir:
         Where to save the final model. Defaults to ``filtering.yaml`` value.
     config_overrides:
         Optional dict to override any ``learned_filter`` config values.
+    use_context:
+        If True and 'context' column exists, include top-1 retrieved
+        passage in the model input.
+    context_dropout:
+        During training, probability of masking context (replaced with
+        empty string). Prevents over-reliance on retrieval. Set to 0 to
+        always use context; set to 1.0 for no-context baseline.
 
     Returns
     -------
@@ -259,7 +340,7 @@ def train_classifier(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    max_length: int = cfg.get("max_length", 512)
+    max_length: int = cfg.get("max_length", 384)
     batch_size: int = cfg.get("batch_size", 16)
     num_epochs: int = cfg.get("num_epochs", 10)
     learning_rate: float = cfg.get("learning_rate", 2e-5)
@@ -268,15 +349,36 @@ def train_classifier(
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     early_stopping_patience: int = cfg.get("early_stopping_patience", 3)
-    use_fp16: bool = cfg.get("fp16", True)
+    use_fp16: bool = cfg.get("fp16", False)
     save_total_limit: int = cfg.get("save_total_limit", 3)
     seed: int = cfg.get("seed", 42)
+
+    # --- Context extraction ---
+    has_context = use_context and "context" in train_df.columns
+    train_contexts = None
+    val_contexts = None
+
+    if has_context:
+        logger.info("Extracting top-1 context for training (dropout=%.2f)", context_dropout)
+        train_contexts = [
+            _extract_top1_context(c) for c in train_df["context"].tolist()
+        ]
+        val_contexts = [
+            _extract_top1_context(c) for c in val_df["context"].tolist()
+        ]
+        non_empty = sum(1 for c in train_contexts if c)
+        logger.info(
+            "Context extracted: %d/%d train samples have non-empty context",
+            non_empty, len(train_contexts),
+        )
+    else:
+        logger.info("Training WITHOUT context (no-context mode)")
 
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
     logger.info("Model: %s  ->  %s", model_name, output_path)
     logger.info(
-        "Train samples: %d  Val samples: %d",
-        len(train_df), len(val_df),
+        "Train samples: %d  Val samples: %d  use_context: %s  context_dropout: %.2f",
+        len(train_df), len(val_df), has_context, context_dropout if has_context else 0.0,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -291,6 +393,8 @@ def train_classifier(
         train_df["label"].tolist(),
         tokenizer,
         max_length=max_length,
+        contexts=train_contexts,
+        context_dropout=context_dropout if has_context else 0.0,
     )
     val_dataset = _QADataset(
         val_df["question"].tolist(),
@@ -298,6 +402,8 @@ def train_classifier(
         val_df["label"].tolist(),
         tokenizer,
         max_length=max_length,
+        contexts=val_contexts,
+        context_dropout=0.0,
     )
 
     data_collator = DataCollatorWithPadding(
@@ -352,6 +458,8 @@ def train_classifier(
     training_log = {
         "config": cfg,
         "model_name": model_name,
+        "use_context": has_context,
+        "context_dropout": context_dropout if has_context else 0.0,
         "train_samples": len(train_df),
         "val_samples": len(val_df),
         "train_metrics": {
