@@ -383,7 +383,7 @@ def train_classifier(
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_name, num_labels=2,
+        model_name, num_labels=2, ignore_mismatched_sizes=True,
     )
     _fix_deberta_layernorm_keys(model)
 
