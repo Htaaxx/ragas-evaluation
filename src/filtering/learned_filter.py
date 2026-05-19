@@ -57,28 +57,60 @@ def _fix_deberta_layernorm_keys(model) -> None:
     """Fix DeBERTa-v3 LayerNorm key naming mismatch in-place.
 
     DeBERTa-v3 checkpoints use a custom LayerNorm with ``.gamma``
-    and ``.beta`` attributes instead of standard ``.weight``/``.bias``.
-    This causes key mismatches when HuggingFace Trainer saves and
-    reloads checkpoints. We rename the actual module attributes so
-    that state_dict() consistently uses ``.weight``/``.bias``.
+    and ``.beta`` registered as nn.Parameters, but HuggingFace Trainer
+    expects ``.weight``/``.bias`` when saving/loading checkpoints.
+
+    On some transformers versions, ``.weight`` exists as a property
+    alias while ``.gamma`` is the actual registered Parameter. We must
+    check ``_parameters`` directly to determine the real registered name.
     """
+    import torch.nn as nn
+
     fixed_count = 0
     for module in model.modules():
-        if hasattr(module, "gamma") and not hasattr(module, "weight"):
-            module.weight = module.gamma
-            del module.gamma
+        # Check the actual registered parameter names, not attributes
+        params = dict(module._parameters)
+
+        if "gamma" in params and "weight" not in params:
+            gamma_param = params["gamma"]
+            del module._parameters["gamma"]
+            module._parameters["weight"] = gamma_param
+            # Also fix the attribute for direct access
+            if hasattr(module, "gamma"):
+                try:
+                    delattr(module, "gamma")
+                except AttributeError:
+                    pass
+            module.weight = gamma_param
             fixed_count += 1
-        if hasattr(module, "beta") and not hasattr(module, "bias"):
-            module.bias = module.beta
-            del module.beta
+
+        if "beta" in params and "bias" not in params:
+            beta_param = params["beta"]
+            del module._parameters["beta"]
+            module._parameters["bias"] = beta_param
+            if hasattr(module, "beta"):
+                try:
+                    delattr(module, "beta")
+                except AttributeError:
+                    pass
+            module.bias = beta_param
             fixed_count += 1
 
     if fixed_count > 0:
         logger.info(
-            "Fixed %d DeBERTa LayerNorm attributes "
-            "(.beta/.gamma -> .weight/.bias)",
+            "Fixed %d DeBERTa LayerNorm parameters "
+            "(.beta/.gamma -> .weight/.bias) in _parameters registry",
             fixed_count,
         )
+    else:
+        # Verify state_dict doesn't have .gamma/.beta keys
+        bad_keys = [k for k in model.state_dict().keys()
+                    if k.endswith(".gamma") or k.endswith(".beta")]
+        if bad_keys:
+            logger.warning(
+                "Found %d .gamma/.beta keys in state_dict despite "
+                "fix attempt: %s", len(bad_keys), bad_keys[:4],
+            )
 
 
 # ---------------------------------------------------------------------------
