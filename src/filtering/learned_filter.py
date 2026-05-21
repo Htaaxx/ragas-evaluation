@@ -163,6 +163,14 @@ def _format_hypothesis(answer: str) -> str:
     return f"Hypothesis: {answer}"
 
 
+# Truncation strategy used everywhere (training + inference + diagnostic).
+# ``"only_first"`` truncates ONLY the context (text_a = Premise), preserving
+# the entire answer (text_b = Hypothesis). Hallucinations differ from correct
+# answers in a single trailing entity at the end of the answer, so the answer
+# tail MUST never be truncated.
+_TRUNCATION_STRATEGY = "only_first"
+
+
 # ---------------------------------------------------------------------------
 # Truncation collision diagnostic (Step 3)
 # ---------------------------------------------------------------------------
@@ -215,11 +223,11 @@ def _truncation_collision_diagnostic(
 
         toks_c = tokenizer(
             _format_premise(context), _format_hypothesis(ans_correct),
-            truncation=True, max_length=max_length,
+            truncation=_TRUNCATION_STRATEGY, max_length=max_length,
         )["input_ids"]
         toks_h = tokenizer(
             _format_premise(context), _format_hypothesis(ans_halluc),
-            truncation=True, max_length=max_length,
+            truncation=_TRUNCATION_STRATEGY, max_length=max_length,
         )["input_ids"]
 
         if toks_c[-tail_tokens:] == toks_h[-tail_tokens:]:
@@ -227,16 +235,18 @@ def _truncation_collision_diagnostic(
 
     rate = collisions / len(pair_rows)
     logger.info(
-        "Truncation collision diagnostic: %d/%d pairs (%.1f%%) "
-        "have identical last %d tokens after truncation (max_length=%d)",
-        collisions, len(pair_rows), 100 * rate, tail_tokens, max_length,
+        "Truncation collision diagnostic: %d/%d pairs (%.1f%%) have "
+        "identical last %d tokens after truncation "
+        "(max_length=%d, strategy=%s)",
+        collisions, len(pair_rows), 100 * rate, tail_tokens,
+        max_length, _TRUNCATION_STRATEGY,
     )
     if rate > 0.05:
         logger.warning(
             "Truncation collision rate %.1f%% > 5%%. The discriminative "
-            "trailing entity is being lost. Consider raising max_length "
-            "or right-truncating the context instead of the answer.",
-            100 * rate,
+            "trailing entity is being lost. Raise max_length "
+            "(currently %d) until this drops below 5%%.",
+            100 * rate, max_length,
         )
     return rate
 
@@ -279,7 +289,7 @@ class _QADataset(Dataset):
         encoding = self.tokenizer(
             _format_premise(self.contexts[idx]),
             _format_hypothesis(self.answers[idx]),
-            truncation=True,
+            truncation=_TRUNCATION_STRATEGY,
             max_length=self.max_length,
         )
         encoding["labels"] = self.labels[idx]
@@ -337,7 +347,7 @@ class AnswerQualityClassifier:
         inputs = self.tokenizer(
             _format_premise(context), _format_hypothesis(answer),
             return_tensors="pt",
-            truncation=True,
+            truncation=_TRUNCATION_STRATEGY,
             max_length=self.max_length,
         ).to(self.device)
 
@@ -371,7 +381,7 @@ class AnswerQualityClassifier:
             inputs = self.tokenizer(
                 batch_c, batch_a,
                 return_tensors="pt",
-                truncation=True,
+                truncation=_TRUNCATION_STRATEGY,
                 padding=True,
                 max_length=self.max_length,
             ).to(self.device)
@@ -567,7 +577,8 @@ def overfit_sanity_check(
     encodings = [
         tokenizer(
             _format_premise(c), _format_hypothesis(a),
-            truncation=True, max_length=max_length, return_tensors="pt",
+            truncation=_TRUNCATION_STRATEGY, max_length=max_length,
+            return_tensors="pt",
         )
         for c, a in zip(contexts, answers)
     ]
@@ -762,8 +773,9 @@ def train_classifier(
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
     logger.info("Model: %s  ->  %s", model_name, output_path)
     logger.info(
-        "Train: %d samples, Val: %d samples, Framing: context→answer (NLI)",
-        len(train_df), len(val_df),
+        "Train: %d samples, Val: %d samples, Framing: context→answer (NLI), "
+        "max_length=%d, truncation=%s (preserves full answer, truncates context)",
+        len(train_df), len(val_df), max_length, _TRUNCATION_STRATEGY,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)

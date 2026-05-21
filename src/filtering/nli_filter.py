@@ -109,7 +109,7 @@ class NLIAnswerFilter:
         inputs = self.tokenizer(
             f"Premise: {context}", f"Hypothesis: {answer}",
             return_tensors="pt",
-            truncation=True,
+            truncation="only_first",
             max_length=self.max_length,
         ).to(self.device)
 
@@ -146,7 +146,7 @@ class NLIAnswerFilter:
             inputs = self.tokenizer(
                 batch_c, batch_a,
                 return_tensors="pt",
-                truncation=True,
+                truncation="only_first",
                 padding=True,
                 max_length=self.max_length,
             ).to(self.device)

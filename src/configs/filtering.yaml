@@ -18,11 +18,19 @@ learned_filter:
   model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
   model_path: "models/answer_filter"
   threshold: 0.5
-  max_length: 384            # raise to 512 if Step 3 reports >5% truncation collisions
-  batch_size: 8
+  # max_length 512 needed: at 384 the truncation collision rate was 47.5%,
+  # i.e. half the (correct, hallucinated) pairs became identical post-tokenization.
+  # Combined with truncation="only_first" (always truncate context, NEVER answer),
+  # this preserves the discriminative trailing entity in every sample.
+  max_length: 512
+  # batch_size 4 needed for fp32 + max_length=512 on 16 GB GPUs (T4/P100).
+  # Effective batch size stays at 16 via gradient_accumulation_steps=4 (auto).
+  batch_size: 4
   num_epochs: 10
-  learning_rate: 2.0e-5
-  classifier_lr: 1.0e-4
+  # learning_rate lowered 2e-5 -> 1e-5: DeBERTa-v3 is numerically delicate;
+  # the previous run went NaN at epoch 3 with 2e-5.
+  learning_rate: 1.0e-5
+  classifier_lr: 1.0e-4      # currently unused (vanilla Trainer uses single LR)
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
