@@ -18,7 +18,7 @@ learned_filter:
   model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
   model_path: "models/answer_filter"
   threshold: 0.5
-  max_length: 384
+  max_length: 384            # raise to 512 if Step 3 reports >5% truncation collisions
   batch_size: 8
   num_epochs: 10
   learning_rate: 2.0e-5
@@ -28,9 +28,15 @@ learned_filter:
   max_grad_norm: 1.0
   label_smoothing: 0.0
   early_stopping_patience: 3
-  fp16: false
+  fp16: false                # NEVER set to true (DeBERTa-v3 instability)
   save_total_limit: 3
   seed: 42
+  # FP-minimization threshold sweep (Step 10)
+  min_recall_for_threshold: 0.70
+  # Weighted-loss tilt (Step 11) — only enable if Step 10 still has high FPR
+  use_weighted_loss: false
+  loss_weight_neg: 2.0
+  loss_weight_pos: 1.0
 
 nli_filter:
   model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"

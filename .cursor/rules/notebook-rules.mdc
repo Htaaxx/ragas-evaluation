@@ -32,6 +32,22 @@ model = train_classifier(train_df, val_df, output_dir="models/answer_filter")
 
 Each notebook must have: Title, Objective, Dataset description, Step-by-step sections, Results/Conclusion.
 
+Filter-training notebooks (`filter_training*.ipynb`) must additionally
+contain, in order, BEFORE any call to `train_classifier()`:
+
+1. **Label-mapping confirmation cell** (assert 1=correct, 0=hallucinated)
+2. **Paired-sample inspection cell** (5 paired correct/hallucinated/context triples)
+3. **Truncation-collision diagnostic cell** (collision rate over ~200 pairs)
+4. **Overfit sanity gate cell** (`assert overfit_sanity_check(train_df).train_f1 >= 0.95`)
+
+AFTER training, they must contain:
+
+5. **Confusion matrix + FPR cell** (2x2 + all metrics from `evaluation-standards.mdc`)
+6. **FP-minimization threshold-sweep cell** (`select_threshold_min_fpr`, NOT max F1)
+7. **3-class NLI zero-shot baseline comparison cell**
+
+See `filter-diagnostic-discipline.mdc` for details.
+
 ## Key Notebooks
 
 - `notebooks/filter_training.ipynb` -- Main experiment: data split, train, evaluate, compare, error analysis

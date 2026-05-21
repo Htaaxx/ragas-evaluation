@@ -66,6 +66,113 @@ def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator > 0 else 0.0
 
 
+def select_threshold_min_fpr(
+    confidences: Sequence[float],
+    labels: Sequence[int],
+    min_recall: float = 0.70,
+    t_range: tuple = (0.05, 0.99, 0.01),
+) -> dict:
+    """Select the threshold that minimizes FPR subject to recall >= min_recall.
+
+    This is the thesis-aligned filter decision rule. We want to keep
+    hallucinations OUT (low FPR) while still letting through enough
+    correct answers (recall floor). F1 is intentionally NOT the
+    selection criterion — it can mask catastrophic FPR.
+
+    Parameters
+    ----------
+    confidences:
+        P(faithful) score per sample (e.g., softmax[:, 1] from the
+        learned classifier, or entailment probability from NLI).
+    labels:
+        Ground-truth labels (1 = correct, 0 = hallucinated).
+    min_recall:
+        Recall floor. We will NOT select a threshold that drops recall
+        below this value.
+    t_range:
+        ``(start, stop_inclusive, step)`` for the threshold sweep.
+
+    Returns
+    -------
+    Dict with the selected ``threshold``, ``fpr``, ``recall``,
+    ``precision``, ``f1``, plus the full sweep table under ``sweep``
+    for diagnostics.
+    """
+    confidences_arr = np.asarray(confidences, dtype=float)
+    labels_arr = np.asarray(labels, dtype=int)
+    n_pos = int((labels_arr == 1).sum())
+    n_neg = int((labels_arr == 0).sum())
+
+    if n_pos == 0 or n_neg == 0:
+        raise ValueError(
+            f"Threshold sweep needs both classes; got pos={n_pos}, neg={n_neg}"
+        )
+
+    start, stop, step = t_range
+    thresholds = np.arange(start, stop + step / 2, step)
+
+    sweep = []
+    for t in thresholds:
+        preds = (confidences_arr >= t).astype(int)
+        tp = int(((preds == 1) & (labels_arr == 1)).sum())
+        tn = int(((preds == 0) & (labels_arr == 0)).sum())
+        fp = int(((preds == 1) & (labels_arr == 0)).sum())
+        fn = int(((preds == 0) & (labels_arr == 1)).sum())
+
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0 else 0.0
+        )
+
+        sweep.append({
+            "threshold": float(t),
+            "fpr": float(fpr),
+            "recall": float(recall),
+            "precision": float(precision),
+            "f1": float(f1),
+            "tp": tp, "tn": tn, "fp": fp, "fn": fn,
+        })
+
+    # Filter to thresholds that meet the recall floor
+    eligible = [s for s in sweep if s["recall"] >= min_recall]
+    if not eligible:
+        # Fall back to the threshold with highest recall (will not meet floor,
+        # but at least gives a usable model). Warn loudly.
+        best = max(sweep, key=lambda s: s["recall"])
+        logger.warning(
+            "No threshold met recall>=%.2f; falling back to highest-recall "
+            "threshold t=%.3f (recall=%.3f, fpr=%.3f). "
+            "Model is unable to keep recall high; consider retraining.",
+            min_recall, best["threshold"], best["recall"], best["fpr"],
+        )
+    else:
+        # Among eligible thresholds, pick the lowest FPR.
+        # Ties broken by higher recall (more accepts when both are equally safe).
+        best = min(eligible, key=lambda s: (s["fpr"], -s["recall"]))
+
+    logger.info(
+        "Threshold selection (min_recall=%.2f): t=%.3f, "
+        "FPR=%.3f, recall=%.3f, precision=%.3f, F1=%.3f",
+        min_recall, best["threshold"], best["fpr"],
+        best["recall"], best["precision"], best["f1"],
+    )
+
+    return {
+        "threshold": best["threshold"],
+        "fpr": best["fpr"],
+        "recall": best["recall"],
+        "precision": best["precision"],
+        "f1": best["f1"],
+        "tp": best["tp"], "tn": best["tn"],
+        "fp": best["fp"], "fn": best["fn"],
+        "min_recall_constraint": float(min_recall),
+        "sweep": sweep,
+    }
+
+
 class FilterEvaluator:
     """Evaluates accept/reject predictions against ground-truth labels.
 

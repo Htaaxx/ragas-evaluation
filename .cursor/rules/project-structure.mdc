@@ -30,7 +30,10 @@ Organize code by **pipeline stage**, matching the actual codebase.
 retrieve → generate → filter (answer quality) → accept/reject
 ```
 
-- Filtering operates AFTER generation, on (question, answer) pairs
+- Filtering operates AFTER generation. Retrieval is assumed correct;
+  the filter verifies whether the generated answer is faithful to the
+  retrieved context. Interface: `(context, answer)` (NLI-style:
+  premise = context, hypothesis = answer).
 - Each stage is independent, testable, and replaceable
 - Filtering logic lives ONLY in `/src/filtering/`
 - Reusable logic goes in `/src/`, never in notebooks

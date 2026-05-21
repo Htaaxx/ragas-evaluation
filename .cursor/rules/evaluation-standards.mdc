@@ -6,41 +6,74 @@ alwaysApply: false
 
 # Evaluation Standards
 
+## North-star goal (filtering)
+
+**Minimize false positives (FPR) subject to recall >= 0.70.** F1 and
+accuracy alone are insufficient — they mask "always accept" collapse,
+which is the failure mode this thesis exists to prevent.
+
 ## Filtering Metrics (Required for Thesis)
 
 Every filter evaluation must report ALL of these on the held-out test set:
 
-- **Precision** = TP / (TP + FP) -- "Of accepted answers, what fraction are correct?"
-- **Recall** = TP / (TP + FN) -- "Of all correct answers, what fraction are accepted?"
-- **F1** = harmonic mean of Precision and Recall
+- **Confusion matrix counts**: TP, TN, FP, FN
+- **Precision** = TP / (TP + FP) — "Of accepted answers, what fraction are correct?"
+- **Recall (TPR)** = TP / (TP + FN) — "Of all correct answers, what fraction are accepted?"
+- **False Positive Rate (FPR)** = FP / (FP + TN) — "Of all hallucinations, what fraction slipped through?" **[PRIMARY METRIC]**
+- **F1** = harmonic mean of Precision and Recall (reported, NOT optimized)
 - **Accuracy** = (TP + TN) / N
-- **Rejection Recall** = TN / (TN + FP) -- "Of all bad answers, what fraction are caught?"
-- **Rejection Rate** = (TN + FN) / N -- "What fraction of answers are filtered out?"
+- **ROC-AUC** = ranking quality, threshold-independent (used for checkpoint selection)
+- **Rejection Recall** = TN / (TN + FP) = 1 - FPR — same info, kept for backward-compat
+- **Rejection Rate** = (TN + FN) / N — what fraction is filtered out
 
 Where:
 - TP = correct answer (label=1) accepted
 - TN = hallucinated answer (label=0) rejected
-- FP = hallucinated answer (label=0) accepted (dangerous)
+- FP = hallucinated answer (label=0) accepted (**dangerous, primary cost**)
 - FN = correct answer (label=1) rejected
 
-## Comparison Baseline
+Print a 2x2 confusion matrix after every test-set evaluation.
 
-Always compare against the **No Filter** baseline:
-- Precision = 50% (balanced data), Recall = 100%, F1 = 66.7%, Accuracy = 50%
+## Threshold Selection Rule
+
+Filters select the final threshold on the **validation set** using
+`select_threshold_min_fpr(confidences, labels, min_recall=0.70)`.
+
+- NOT max F1 (allows all-accept).
+- NOT argmax / threshold=0.5 (debugging only).
+- Sweep thresholds 0.05..0.99 step 0.01; pick the one with minimum FPR
+  among those with `recall >= min_recall`.
+- Persist the chosen threshold + its full metrics to
+  `results/threshold_selection.json`.
+
+## Required Baselines
+
+Every filter comparison table must include all of:
+
+1. **No Filter** (accept everything): Precision=0.50 on balanced data,
+   Recall=1.00, F1=0.667, FPR=1.00.
+2. **3-class NLI zero-shot**: `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`
+   in its native entailment/neutral/contradiction form, using
+   `P(entailment)` as confidence. No fine-tuning.
+3. **Our fine-tuned binary classifier**: `AnswerQualityClassifier`.
+
+If (2) beats (3) on FPR at the same recall, fine-tuning is hurting and
+must be reconsidered before publishing.
 
 ## Results Storage
 
 - Save metrics to `/results/` as JSON with timestamp and config snapshot
 - Save predictions (per-sample accept/reject + confidence) to CSV
-- Include precision-recall curve data for threshold analysis
+- Include precision-recall curve and ROC curve data for threshold analysis
+- Persist `results/threshold_selection.json` per the rule above
 
 ## Experiment Rules
 
 - NEVER evaluate on training data
 - NEVER mix train/val/test splits
-- Always report the threshold used
+- Always report the threshold used (log at every inference call site)
 - Always include error analysis: which hallucination types are caught vs. missed
-- Log: model checkpoint, threshold, all metrics, split sizes
+- Log: model checkpoint, threshold, all metrics, split sizes, RNG seed
 
 ## Retrieval Metrics (Secondary, Existing)
 

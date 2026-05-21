@@ -22,15 +22,19 @@ alwaysApply: false
 
 ```python
 # BAD
-def proc(q, a):
+def proc(c, a):
     return a if len(a) > 10 else None
 
-# GOOD
+# GOOD - faithfulness verifier: (context, answer)
 def classify_answer(
-    question: str,
+    context: str,
     answer: str,
     threshold: float = 0.5,
 ) -> FilterDecision:
-    prob = model.predict_proba(question, answer)
-    return FilterDecision(accept=prob >= threshold, confidence=prob)
+    prob = model.predict_p_faithful(context, answer)
+    return FilterDecision(
+        accept=prob >= threshold,
+        confidence=prob,
+        reasoning=f"P(faithful)={prob:.3f}, threshold={threshold}",
+    )
 ```

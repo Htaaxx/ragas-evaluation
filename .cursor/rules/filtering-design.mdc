@@ -6,9 +6,17 @@ alwaysApply: false
 
 # Filtering Layer Design (Core Thesis Focus)
 
-The filtering layer is an **answer quality gate** that operates AFTER generation.
-It takes (question, answer) and returns accept/reject. No ground truth or context
-is needed at inference time. This is a black-box answer-only approach.
+The filtering layer is a **faithfulness verifier** that operates AFTER
+generation. Retrieval is assumed correct, so the filter's job is to check
+whether the generated answer is faithful to the retrieved context.
+
+Framing: **NLI** — premise = context, hypothesis = answer.
+- Entailment -> answer is faithful -> accept
+- Contradiction / neutral -> answer is unfaithful -> reject
+
+Companion rule: see `filter-diagnostic-discipline.mdc` for the
+pre-training gates, FP-minimization threshold rule, required baselines,
+and forbidden patterns.
 
 ## Module Structure
 
@@ -18,7 +26,11 @@ is needed at inference time. This is a black-box answer-only approach.
   data_models.py         # AnswerReward, FilterDiagnostics, FilterDecision
   data_split.py          # load_and_split() for labeled_asqa.csv
   learned_filter.py      # AnswerQualityClassifier + train_classifier()
-  filter_evaluator.py    # FilterEvaluator + FilterResult
+                         #   + _extract_top1_context()
+                         #   + overfit_sanity_check()
+  nli_filter.py          # NLIAnswerFilter (zero-shot baseline)
+  ensemble_filter.py     # EnsembleFilter (learned + NLI + lexical)
+  filter_evaluator.py    # FilterEvaluator + select_threshold_min_fpr()
   metrics.py             # AnswerMetricBundle (existing, kept for analysis)
   llm_filter.py          # AnswerFilter (existing, kept for LLM-as-judge)
   reward_filter.py       # AnswerRewardFilter (existing, kept for retry logic)
@@ -27,37 +39,61 @@ is needed at inference time. This is a black-box answer-only approach.
 
 ## Rules
 
-- The primary filter is `AnswerQualityClassifier` (fine-tuned DeBERTa-v3-small)
-- Filter interface: `predict(question, answer) -> FilterDecision`
-- `FilterDecision` contains: `accept: bool`, `confidence: float`, `reasoning: str`
+- The primary filter is `AnswerQualityClassifier` — a fine-tuned
+  `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` (NLI-pretrained 184M).
+- Filter interface: `predict(context, answer) -> FilterDecision`
+- `FilterDecision` contains: `accept: bool`, `confidence: float`,
+  `reasoning: str` (e.g., `"P(faithful)=0.83, threshold=0.65"`)
 - NEVER hardcode thresholds -> load from `/src/configs/filtering.yaml`
-- All filter parameters (model_path, threshold, max_length) must come from config
-- Log every filter decision for post-hoc analysis
+- All filter parameters (`model_path`, `threshold`, `max_length`) must
+  come from config
+- Log every filter decision (including the threshold used) for post-hoc
+  analysis
 
 ```python
-# BAD - hardcoded, no structured output
+# BAD - wrong framing (question as premise), hardcoded, no structured output
 def filter(question, answer):
-    return len(answer) > 50  # arbitrary
+    return len(answer) > 50
 
-# GOOD - config-driven, structured output
+# GOOD - NLI faithfulness framing, config-driven, structured output
 class AnswerQualityClassifier:
     def __init__(self, model_path: str, threshold: float = 0.5):
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
         self.threshold = threshold
 
-    def predict(self, question: str, answer: str) -> FilterDecision:
-        prob = self._compute_probability(question, answer)
+    def predict(self, context: str, answer: str) -> FilterDecision:
+        # text_a = premise (context), text_b = hypothesis (answer)
+        prob = self._compute_p_faithful(context, answer)
         return FilterDecision(
             accept=prob >= self.threshold,
             confidence=prob,
-            reasoning=f"P(correct)={prob:.3f}",
+            reasoning=f"P(faithful)={prob:.3f}, threshold={self.threshold}",
         )
 ```
 
 ## Training Rules
 
-- Train on `labeled_asqa.csv` (8,706 samples: 4,353 correct + 4,353 hallucinated)
-- Split by base question ID to prevent data leakage
-- Monitor validation F1, use early stopping
-- Save best checkpoint to `models/answer_filter/`
-- Never evaluate on training data -- always use held-out test set
+- Train on `labeled_asqa.csv` (8,706 samples: 4,353 correct + 4,353
+  hallucinated). Dataset is balanced — do NOT use class weighting by
+  default.
+- Split by base question ID (`asqa_X` and `asqa_Xb` stay together) to
+  prevent data leakage.
+- **Always run `overfit_sanity_check()` (HARD GATE) before
+  `train_classifier()`**. See `filter-diagnostic-discipline.mdc`.
+- Use the vanilla HuggingFace `Trainer`. No custom `training_step`, no
+  custom optimizer unless the vanilla path is already green.
+- `fp16: false` always (DeBERTa-v3 instability).
+- Monitor `roc_auc` for checkpoint selection (NOT F1 at threshold 0.5,
+  which masks all-accept collapse). Use early stopping with patience=3.
+- Save best checkpoint to `models/answer_filter/`.
+- Never evaluate on training data — always use held-out test set.
+
+## Threshold Selection (CRITICAL)
+
+The final filter threshold is selected on the validation set using
+`select_threshold_min_fpr(confidences, labels, min_recall=0.70)` —
+**minimize FPR subject to recall >= 0.70**. NOT max F1. Argmax
+(threshold=0.5) is for debugging only and never used as the final filter.
+
+Persist the chosen threshold + its `(fpr, recall, precision, f1)` to
+`results/threshold_selection.json`.

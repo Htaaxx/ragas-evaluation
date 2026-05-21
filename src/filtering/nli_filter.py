@@ -105,8 +105,9 @@ class NLIAnswerFilter:
 
     def predict(self, context: str, answer: str) -> FilterDecision:
         """Check if context entails the answer (faithfulness)."""
+        logger.info("NLIAnswerFilter.predict using threshold=%.3f", self.threshold)
         inputs = self.tokenizer(
-            context, answer,
+            f"Premise: {context}", f"Hypothesis: {answer}",
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -132,11 +133,15 @@ class NLIAnswerFilter:
         batch_size: int = 32,
     ) -> List[FilterDecision]:
         """Check faithfulness for a batch of (context, answer) pairs."""
+        logger.info(
+            "NLIAnswerFilter.predict_batch using threshold=%.3f (n=%d)",
+            self.threshold, len(contexts),
+        )
         decisions: List[FilterDecision] = []
 
         for start in range(0, len(contexts), batch_size):
-            batch_c = contexts[start: start + batch_size]
-            batch_a = answers[start: start + batch_size]
+            batch_c = [f"Premise: {c}" for c in contexts[start: start + batch_size]]
+            batch_a = [f"Hypothesis: {a}" for a in answers[start: start + batch_size]]
 
             inputs = self.tokenizer(
                 batch_c, batch_a,

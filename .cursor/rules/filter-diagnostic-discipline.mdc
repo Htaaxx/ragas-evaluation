@@ -1,0 +1,128 @@
+---
+description: Diagnostic discipline for the learned answer-quality filter (faithfulness classifier)
+globs: "**/filtering/**,**/notebooks/filter_*.ipynb"
+alwaysApply: false
+---
+
+# Filter Diagnostic Discipline
+
+These rules codify hard lessons from earlier failed runs (NaN explosions,
+silent model collapse to "always accept", LayerNorm key mismatches). They
+apply to any work on the learned faithfulness filter
+(`src/filtering/learned_filter.py`) and its training notebooks.
+
+## North-star goal
+
+**Minimize false positives (FPR) while keeping acceptable recall (>= 0.70).**
+F1, accuracy, and argmax-at-0.5 are NOT the targets — they hide all-accept
+behavior. The filter exists to catch hallucinations; missing them is the
+expensive error.
+
+## Pre-training gates (run IN ORDER, every time)
+
+1. **Label-mapping confirmation cell** — assert `label==1` is correct,
+   `label==0` is hallucinated. Print one known pair (`asqa_5` vs `asqa_5b`)
+   as visual proof.
+2. **Paired-sample inspection cell** — print 5 paired
+   `(question, top1_context, correct_answer, hallucinated_answer)` triples.
+   Manually verify hallucinations are subtle entity swaps, not paraphrases.
+3. **Truncation-collision diagnostic** — for ~200 sampled pairs, tokenize
+   `(context, correct)` and `(context, halluc)` with current `max_length`.
+   Count pairs whose **last 10 tokens after truncation are identical**.
+   If collision rate > 5%, raise `max_length` or right-tail-keep the answer.
+   Discriminative signal lives in the trailing entity.
+4. **Overfit sanity check (HARD GATE)** — `overfit_sanity_check(df, n=32, epochs=50)`
+   must reach train F1 >= 0.95. A 184M model MUST overfit 32 samples.
+   If it doesn't, the data/format/code is broken. **Never scale to full
+   training until this passes.**
+
+## Training rules
+
+- **Use the vanilla HuggingFace `Trainer` first.** Do NOT override
+  `training_step`, do NOT pass a custom optimizer, until the vanilla path
+  proves the model learns. Custom training loops were the root cause of NaN.
+- **No `fp16=True`, ever.** It is unstable with DeBERTa-v3 disentangled
+  attention. Keep `fp16: false` in `filtering.yaml`; add a runtime assert
+  in `train_classifier()` that re-confirms this.
+- **Differential learning rates are optional, and high `classifier_lr`
+  (>= 5e-4) is FORBIDDEN.** It blew up gradients in earlier runs. If used,
+  cap at `5e-5`, and add a matching `LambdaLR` scheduler — never pass a
+  custom optimizer without its scheduler.
+- **LayerNorm key handling**: only `_load_deberta_model()` (state-dict
+  remap) is allowed. Do NOT replace `DebertaV2LayerNorm` modules; the
+  resulting key-name change breaks Trainer save/reload.
+
+## Evaluation rules
+
+- **Never use `argmax` (== threshold 0.5) for the final filter decision.**
+  Pick a threshold on the validation set; log it at every inference call site.
+- **Threshold selection rule**: `select_threshold_min_fpr(confidences,
+  labels, min_recall=0.70)`. NOT max F1. Save the chosen threshold + its
+  `(fpr, recall, precision, f1)` to `results/threshold_selection.json`.
+- **Every filter evaluation must report**: TP, TN, FP, FN counts;
+  precision, recall, F1; FPR, TPR; ROC-AUC. Print a 2x2 confusion matrix.
+- **Required baselines** (every comparison table includes all three):
+  - No Filter (accept everything)
+  - 3-class NLI zero-shot
+    (`MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` in its native
+    entailment / neutral / contradiction form, using `P(entailment)` as
+    confidence)
+  - Our fine-tuned binary classifier
+  If the zero-shot baseline beats our fine-tuned model on FPR, the
+  fine-tuning is hurting and must be reconsidered.
+
+## Debugging discipline
+
+- **When loss is NaN or the model collapses, STRIP components, don't add.**
+  Remove the custom optimizer first, then the custom training step, then
+  any custom callbacks. Re-validate after each removal. Add nothing back
+  until the vanilla path is green.
+- **When running on remote envs (Kaggle), look for a sentinel log line**
+  in the training output to confirm the latest code is loaded.
+  E.g. `"LayerNorm keys: no .gamma/.beta remapping needed"` is the current
+  sentinel. If you don't see it, you're running stale code.
+- **Class weighting (`use_weighted_loss: true`) is a last resort**, only
+  after threshold tuning still cannot reach the FPR target. The dataset
+  is balanced 4353/4353; weighting is a decision-boundary nudge, not a
+  class-imbalance fix.
+
+## Forbidden patterns
+
+```python
+# BAD - argmax decision, threshold ignored
+preds = logits.argmax(-1)
+return preds.tolist()
+
+# BAD - max-F1 threshold selection (allows all-accept)
+best_t = max(thresholds, key=lambda t: f1(preds(t), labels))
+
+# BAD - custom training_step that re-divides loss
+class _MyTrainer(Trainer):
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        ...
+        loss = loss / self.args.gradient_accumulation_steps  # double-divide!
+        self.accelerator.backward(loss)
+
+# BAD - replacing LayerNorm modules
+for name, m in model.named_modules():
+    if isinstance(m, DebertaV2LayerNorm):
+        setattr(parent, leaf, nn.LayerNorm(...))  # breaks save/reload
+```
+
+```python
+# GOOD - threshold-driven decision, min-FPR selection
+probs = torch.softmax(logits, dim=-1)[:, 1]
+accepts = probs >= self.threshold
+logger.info("Using threshold=%.3f", self.threshold)
+
+# GOOD - FP-minimization threshold sweep
+best_t = select_threshold_min_fpr(confidences, labels, min_recall=0.70)
+
+# GOOD - vanilla Trainer
+trainer = Trainer(
+    model=model, args=training_args,
+    train_dataset=train_ds, eval_dataset=val_ds,
+    compute_metrics=_compute_metrics,
+    callbacks=[EarlyStoppingCallback(patience=3)],
+)
+```

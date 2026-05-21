@@ -24,9 +24,11 @@ import torch
 import yaml
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 from torch.utils.data import Dataset
 from transformers import (
@@ -148,6 +150,98 @@ def _extract_top1_context(context_str: str, max_chars: int = 800) -> str:
 
 
 # ---------------------------------------------------------------------------
+# NLI formatting (Step 4) — explicit Premise/Hypothesis role cues
+# ---------------------------------------------------------------------------
+
+def _format_premise(context: str) -> str:
+    """Wrap context with an explicit Premise: cue for the MNLI head."""
+    return f"Premise: {context}"
+
+
+def _format_hypothesis(answer: str) -> str:
+    """Wrap answer with an explicit Hypothesis: cue for the MNLI head."""
+    return f"Hypothesis: {answer}"
+
+
+# ---------------------------------------------------------------------------
+# Truncation collision diagnostic (Step 3)
+# ---------------------------------------------------------------------------
+
+def _truncation_collision_diagnostic(
+    tokenizer,
+    df: pd.DataFrame,
+    contexts: Sequence[str],
+    max_length: int,
+    n: int = 200,
+    tail_tokens: int = 10,
+) -> float:
+    """Log the fraction of (correct, hallucinated) pairs whose tokenized
+    inputs are identical in their last ``tail_tokens`` after truncation.
+
+    Hallucinations differ from correct answers only in a trailing entity.
+    If truncation kills that entity, the model has no signal to learn from.
+
+    Returns the collision rate (0.0 to 1.0).
+    """
+    # Build a base-id index
+    base_col = df["id"].str.replace(r"b$", "", regex=True)
+    df_indexed = df.copy()
+    df_indexed["_base"] = base_col
+    df_indexed["_pos"] = list(range(len(df_indexed)))
+
+    pair_rows = []
+    for base, group in df_indexed.groupby("_base"):
+        if len(group) < 2:
+            continue
+        pos_row = group[group["label"] == 1]
+        neg_row = group[group["label"] == 0]
+        if len(pos_row) == 0 or len(neg_row) == 0:
+            continue
+        pair_rows.append((int(pos_row.iloc[0]["_pos"]), int(neg_row.iloc[0]["_pos"])))
+        if len(pair_rows) >= n:
+            break
+
+    if not pair_rows:
+        logger.warning(
+            "Truncation diagnostic: no paired (asqa_X, asqa_Xb) found"
+        )
+        return 0.0
+
+    collisions = 0
+    for pos_idx, neg_idx in pair_rows:
+        context = contexts[pos_idx]
+        ans_correct = str(df.iloc[pos_idx]["answer"])
+        ans_halluc = str(df.iloc[neg_idx]["answer"])
+
+        toks_c = tokenizer(
+            _format_premise(context), _format_hypothesis(ans_correct),
+            truncation=True, max_length=max_length,
+        )["input_ids"]
+        toks_h = tokenizer(
+            _format_premise(context), _format_hypothesis(ans_halluc),
+            truncation=True, max_length=max_length,
+        )["input_ids"]
+
+        if toks_c[-tail_tokens:] == toks_h[-tail_tokens:]:
+            collisions += 1
+
+    rate = collisions / len(pair_rows)
+    logger.info(
+        "Truncation collision diagnostic: %d/%d pairs (%.1f%%) "
+        "have identical last %d tokens after truncation (max_length=%d)",
+        collisions, len(pair_rows), 100 * rate, tail_tokens, max_length,
+    )
+    if rate > 0.05:
+        logger.warning(
+            "Truncation collision rate %.1f%% > 5%%. The discriminative "
+            "trailing entity is being lost. Consider raising max_length "
+            "or right-truncating the context instead of the answer.",
+            100 * rate,
+        )
+    return rate
+
+
+# ---------------------------------------------------------------------------
 # HuggingFace Dataset wrapper (lazy tokenization for dynamic padding)
 # ---------------------------------------------------------------------------
 
@@ -183,8 +277,8 @@ class _QADataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         encoding = self.tokenizer(
-            self.contexts[idx],
-            self.answers[idx],
+            _format_premise(self.contexts[idx]),
+            _format_hypothesis(self.answers[idx]),
             truncation=True,
             max_length=self.max_length,
         )
@@ -239,8 +333,9 @@ class AnswerQualityClassifier:
         answer: str,
     ) -> FilterDecision:
         """Check if answer is faithful to context (NLI framing)."""
+        logger.info("AnswerQualityClassifier.predict using threshold=%.3f", self.threshold)
         inputs = self.tokenizer(
-            context, answer,
+            _format_premise(context), _format_hypothesis(answer),
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -263,11 +358,15 @@ class AnswerQualityClassifier:
         batch_size: int = 32,
     ) -> List[FilterDecision]:
         """Check faithfulness for a batch of (context, answer) pairs."""
+        logger.info(
+            "AnswerQualityClassifier.predict_batch using threshold=%.3f (n=%d)",
+            self.threshold, len(contexts),
+        )
         decisions: List[FilterDecision] = []
 
         for start in range(0, len(contexts), batch_size):
-            batch_c = contexts[start : start + batch_size]
-            batch_a = answers[start : start + batch_size]
+            batch_c = [_format_premise(c) for c in contexts[start : start + batch_size]]
+            batch_a = [_format_hypothesis(a) for a in answers[start : start + batch_size]]
 
             inputs = self.tokenizer(
                 batch_c, batch_a,
@@ -297,27 +396,267 @@ class AnswerQualityClassifier:
 
 
 def _compute_metrics(eval_pred) -> Dict[str, float]:
-    """Metric callback for HuggingFace Trainer."""
+    """Metric callback for HuggingFace Trainer.
+
+    Reports the full thesis metric set:
+      - confusion matrix counts (tp, tn, fp, fn)
+      - precision, recall, f1 at threshold=0.5 (legacy debug)
+      - fpr (PRIMARY thesis metric — false positive rate)
+      - tpr, accuracy
+      - roc_auc (threshold-independent; used for checkpoint selection)
+    """
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)
+    probs = torch.softmax(torch.tensor(logits), dim=-1).numpy()[:, 1]
 
-    # Log prediction distribution for debugging
-    pred_counts = {0: int((preds == 0).sum()), 1: int((preds == 1).sum())}
-    label_counts = {0: int((labels == 0).sum()), 1: int((labels == 1).sum())}
+    cm = confusion_matrix(labels, preds, labels=[0, 1])
+    tn, fp, fn, tp = int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+    try:
+        roc_auc = float(roc_auc_score(labels, probs))
+    except ValueError:
+        roc_auc = 0.5
+
     logits_mean = logits.mean(axis=0).tolist()
     logits_std = logits.std(axis=0).tolist()
     logger.info(
-        "EVAL: preds=%s labels=%s logits_mean=%s logits_std=%s",
-        pred_counts, label_counts,
+        "EVAL: cm=[[TN=%d, FP=%d],[FN=%d, TP=%d]] "
+        "fpr=%.3f tpr=%.3f roc_auc=%.3f "
+        "logits_mean=%s logits_std=%s",
+        tn, fp, fn, tp, fpr, tpr, roc_auc,
         [f"{x:.4f}" for x in logits_mean],
         [f"{x:.4f}" for x in logits_std],
     )
 
     return {
         "accuracy": accuracy_score(labels, preds),
-        "f1": f1_score(labels, preds),
+        "f1": f1_score(labels, preds, zero_division=0),
         "precision": precision_score(labels, preds, zero_division=0),
         "recall": recall_score(labels, preds, zero_division=0),
+        "fpr": fpr,
+        "tpr": tpr,
+        "roc_auc": roc_auc,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Weighted-loss Trainer (Step 11) — optional FP-penalty
+# ---------------------------------------------------------------------------
+
+class _WeightedTrainer(Trainer):
+    """Trainer that applies per-class CrossEntropy weights.
+
+    Enabled via ``use_weighted_loss: true`` in filtering.yaml. Used as a
+    decision-boundary nudge AFTER threshold tuning still cannot reach the
+    FPR target. Default weights penalize FP harder (weight on class 0 > 1).
+    """
+
+    def __init__(self, *args, class_weights: torch.Tensor | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._class_weights = class_weights
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        weight = (
+            self._class_weights.to(logits.device)
+            if self._class_weights is not None else None
+        )
+        loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
+        loss = loss_fn(logits, labels)
+        inputs["labels"] = labels
+        return (loss, outputs) if return_outputs else loss
+
+
+# ---------------------------------------------------------------------------
+# Overfit sanity check (Step 5) — the HARD GATE before full training
+# ---------------------------------------------------------------------------
+
+def overfit_sanity_check(
+    df: pd.DataFrame,
+    n_pairs: int = 16,
+    epochs: int = 50,
+    model_name: str | None = None,
+    learning_rate: float = 5e-5,
+    max_length: int | None = None,
+) -> Dict[str, float]:
+    """Try to overfit ``n_pairs`` paired (correct, halluc) examples.
+
+    A 184M-parameter model MUST be able to fit a tiny labelled set. If
+    train F1 does not reach >= 0.95 within ``epochs``, the code, data, or
+    input format is broken — do NOT scale up to full training.
+
+    Parameters
+    ----------
+    df:
+        DataFrame with ``id``, ``question``, ``answer``, ``context``,
+        ``label`` columns.
+    n_pairs:
+        Number of paired base IDs to use (total samples = 2 * n_pairs).
+    epochs:
+        Training epochs on the tiny set.
+    model_name:
+        HuggingFace model ID; defaults to filtering.yaml value.
+    learning_rate:
+        LR for the overfit run. Higher than full-train default since the
+        set is tiny.
+    max_length:
+        Defaults to filtering.yaml value.
+
+    Returns
+    -------
+    Dict with ``train_f1``, ``train_loss``, ``train_fpr``,
+    ``train_recall``, ``train_precision``, plus per-pair logits for
+    debugging when the test fails.
+    """
+    cfg = _load_learned_filter_config()
+    model_name = model_name or cfg["model_name"]
+    max_length = max_length or cfg.get("max_length", 384)
+
+    base_col = df["id"].str.replace(r"b$", "", regex=True)
+    df_idx = df.copy()
+    df_idx["_base"] = base_col
+
+    selected_rows = []
+    seen_bases = set()
+    for _, row in df_idx.iterrows():
+        b = row["_base"]
+        if b in seen_bases:
+            continue
+        group = df_idx[df_idx["_base"] == b]
+        if (group["label"] == 1).any() and (group["label"] == 0).any():
+            selected_rows.append(group[group["label"] == 1].iloc[0])
+            selected_rows.append(group[group["label"] == 0].iloc[0])
+            seen_bases.add(b)
+        if len(seen_bases) >= n_pairs:
+            break
+
+    if len(seen_bases) < n_pairs:
+        logger.warning(
+            "overfit_sanity_check: only found %d pairs (requested %d)",
+            len(seen_bases), n_pairs,
+        )
+
+    mini_df = pd.DataFrame(selected_rows).reset_index(drop=True)
+    contexts = [_extract_top1_context(c) for c in mini_df["context"].tolist()]
+    answers = [str(a) for a in mini_df["answer"].tolist()]
+    labels = [int(lbl) for lbl in mini_df["label"].tolist()]
+    ids = mini_df["id"].tolist()
+
+    logger.info(
+        "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs at lr=%.0e",
+        len(mini_df),
+        sum(1 for lbl in labels if lbl == 1),
+        sum(1 for lbl in labels if lbl == 0),
+        epochs, learning_rate,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = _load_deberta_model(model_name, num_labels=2)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    encodings = [
+        tokenizer(
+            _format_premise(c), _format_hypothesis(a),
+            truncation=True, max_length=max_length, return_tensors="pt",
+        )
+        for c, a in zip(contexts, answers)
+    ]
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    model.train()
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        # Iterate over batches of 8 (matches full training shape)
+        for start in range(0, len(encodings), 8):
+            batch = encodings[start : start + 8]
+            batch_labels = torch.tensor(
+                labels[start : start + 8], device=device,
+            )
+            input_ids = torch.nn.utils.rnn.pad_sequence(
+                [enc["input_ids"].squeeze(0) for enc in batch],
+                batch_first=True,
+                padding_value=tokenizer.pad_token_id or 0,
+            ).to(device)
+            attention_mask = torch.nn.utils.rnn.pad_sequence(
+                [enc["attention_mask"].squeeze(0) for enc in batch],
+                batch_first=True,
+                padding_value=0,
+            ).to(device)
+
+            optimizer.zero_grad()
+            out = model(input_ids=input_ids, attention_mask=attention_mask)
+            loss = loss_fn(out.logits, batch_labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            epoch_loss += loss.item()
+
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            logger.info(
+                "  epoch %d/%d: loss=%.4f",
+                epoch + 1, epochs, epoch_loss / max(1, len(encodings) // 8),
+            )
+
+    # Final evaluation on training set
+    model.eval()
+    all_preds: List[int] = []
+    all_probs: List[float] = []
+    with torch.no_grad():
+        for enc in encodings:
+            enc_dev = {k: v.to(device) for k, v in enc.items()}
+            out = model(**enc_dev)
+            probs = torch.softmax(out.logits, dim=-1)[0]
+            all_probs.append(probs[1].item())
+            all_preds.append(int(probs.argmax().item()))
+
+    cm = confusion_matrix(labels, all_preds, labels=[0, 1])
+    tn, fp, fn, tp = int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+    f1 = f1_score(labels, all_preds, zero_division=0)
+    precision = precision_score(labels, all_preds, zero_division=0)
+    recall = recall_score(labels, all_preds, zero_division=0)
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+    logger.info(
+        "OVERFIT RESULT: F1=%.3f P=%.3f R=%.3f FPR=%.3f "
+        "[TN=%d FP=%d FN=%d TP=%d]",
+        f1, precision, recall, fpr, tn, fp, fn, tp,
+    )
+
+    # If it failed, log the worst-classified pairs for debugging
+    if f1 < 0.95:
+        logger.error(
+            "OVERFIT FAILED — F1=%.3f < 0.95. The code/data/format is broken.",
+            f1,
+        )
+        errors = [
+            (ids[i], labels[i], all_preds[i], all_probs[i], answers[i][:120])
+            for i in range(len(labels)) if labels[i] != all_preds[i]
+        ]
+        for sid, lbl, pred, prob, ans in errors[:5]:
+            logger.error(
+                "  WORST: id=%s label=%d pred=%d p_faithful=%.3f answer='%s...'",
+                sid, lbl, pred, prob, ans,
+            )
+
+    return {
+        "train_f1": float(f1),
+        "train_precision": float(precision),
+        "train_recall": float(recall),
+        "train_fpr": float(fpr),
+        "n_samples": len(labels),
+        "tp": tp, "tn": tn, "fp": fp, "fn": fn,
     }
 
 
@@ -373,6 +712,17 @@ def train_classifier(
     use_fp16: bool = cfg.get("fp16", False)
     save_total_limit: int = cfg.get("save_total_limit", 3)
     seed: int = cfg.get("seed", 42)
+    use_weighted_loss: bool = cfg.get("use_weighted_loss", False)
+    loss_weight_neg: float = cfg.get("loss_weight_neg", 2.0)
+    loss_weight_pos: float = cfg.get("loss_weight_pos", 1.0)
+
+    # Step 8: FP32 enforcement. Filter training must NEVER use fp16
+    # (DeBERTa-v3 disentangled attention instability).
+    assert use_fp16 is False, (
+        "Thesis run must use FP32 for numerical stability. "
+        "Set fp16: false in filtering.yaml."
+    )
+    logger.info("FP32 mode enforced (fp16=False)")
 
     # --- Context extraction (required) ---
     if "context" not in train_df.columns:
@@ -418,6 +768,11 @@ def train_classifier(
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = _load_deberta_model(model_name, num_labels=2)
+
+    # Step 3: truncation collision diagnostic
+    _truncation_collision_diagnostic(
+        tokenizer, train_df, train_contexts, max_length=max_length, n=200,
+    )
 
     train_dataset = _QADataset(
         train_contexts,
@@ -472,27 +827,50 @@ def train_classifier(
         save_strategy="epoch",
         logging_steps=10,
         load_best_model_at_end=True,
-        metric_for_best_model="f1",
+        metric_for_best_model="roc_auc",
         greater_is_better=True,
         save_total_limit=save_total_limit,
         seed=seed,
-        fp16=use_fp16,
         report_to="none",
     )
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        data_collator=data_collator,
-        compute_metrics=_compute_metrics,
-        callbacks=[
-            EarlyStoppingCallback(
-                early_stopping_patience=early_stopping_patience,
-            ),
-        ],
-    )
+    if use_weighted_loss:
+        class_weights = torch.tensor(
+            [loss_weight_neg, loss_weight_pos], dtype=torch.float32,
+        )
+        logger.info(
+            "Using WeightedTrainer (class_weights=[neg=%.2f, pos=%.2f]) "
+            "— this nudges the decision boundary to penalize FP",
+            loss_weight_neg, loss_weight_pos,
+        )
+        trainer = _WeightedTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+            compute_metrics=_compute_metrics,
+            class_weights=class_weights,
+            callbacks=[
+                EarlyStoppingCallback(
+                    early_stopping_patience=early_stopping_patience,
+                ),
+            ],
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+            compute_metrics=_compute_metrics,
+            callbacks=[
+                EarlyStoppingCallback(
+                    early_stopping_patience=early_stopping_patience,
+                ),
+            ],
+        )
 
     # Pre-flight: test forward on longer sequences to catch NaN early
     logger.info("Running pre-flight on 16 random samples...")
