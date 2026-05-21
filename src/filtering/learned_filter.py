@@ -35,7 +35,6 @@ from transformers import (
     DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
-    TrainerCallback,
     TrainingArguments,
 )
 
@@ -296,33 +295,54 @@ class AnswerQualityClassifier:
 # Training
 # ---------------------------------------------------------------------------
 
-class _NaNDetectionCallback(TrainerCallback):
-    """Stop training immediately if loss becomes NaN/Inf."""
+class _NaNSafeTrainer(Trainer):
+    """Trainer that detects NaN on every step and logs diagnostics."""
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is None:
-            return
-        loss = logs.get("loss")
-        if loss is not None and (np.isnan(loss) or np.isinf(loss)):
-            logger.error(
-                "NaN/Inf loss detected at step %d (epoch %.2f). "
-                "Stopping training.",
-                state.global_step, state.epoch or 0,
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        with self.compute_loss_context_manager():
+            loss = self.compute_loss(
+                model, inputs, num_items_in_batch=num_items_in_batch,
             )
-            control.should_training_stop = True
 
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        if model is None:
-            return
-        for name, param in model.named_parameters():
-            if param.requires_grad and torch.isnan(param).any():
+        if self.args.gradient_accumulation_steps > 1:
+            loss = loss / self.args.gradient_accumulation_steps
+
+        if torch.isnan(loss) or torch.isinf(loss):
+            step = self.state.global_step
+            batch_shape = inputs["input_ids"].shape
+            max_tok = inputs["input_ids"].ne(0).sum(dim=1).max().item()
+            logger.error(
+                "NaN loss at step %d! batch=%s, longest_seq=%d tokens",
+                step, batch_shape, max_tok,
+            )
+            # Which parameters already have NaN?
+            nan_params = [
+                n for n, p in model.named_parameters()
+                if torch.isnan(p).any()
+            ]
+            if nan_params:
                 logger.error(
-                    "NaN detected in parameter '%s' at step %d. "
-                    "Stopping training.",
-                    name, state.global_step,
+                    "NaN in %d params: %s", len(nan_params), nan_params[:5],
                 )
-                control.should_training_stop = True
-                return
+            else:
+                logger.error("No NaN in params — NaN originated in forward pass")
+
+            # Try forward without loss to see where logits break
+            with torch.no_grad():
+                out = model(**inputs)
+                logits = out.logits
+                logger.error(
+                    "Re-forward logits: mean=%.4f, std=%.4f, nan=%s",
+                    logits.mean().item() if not torch.isnan(logits).any() else float("nan"),
+                    logits.std().item() if not torch.isnan(logits).any() else float("nan"),
+                    bool(torch.isnan(logits).any()),
+                )
+
+        self.accelerator.backward(loss)
+        return loss.detach()
 
 
 def _compute_metrics(eval_pred) -> Dict[str, float]:
@@ -531,7 +551,7 @@ def train_classifier(
         report_to="none",
     )
 
-    trainer = Trainer(
+    trainer = _NaNSafeTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -543,31 +563,48 @@ def train_classifier(
             EarlyStoppingCallback(
                 early_stopping_patience=early_stopping_patience,
             ),
-            _NaNDetectionCallback(),
         ],
     )
 
-    # Pre-flight forward pass to catch NaN before wasting time
-    logger.info("Running pre-flight forward pass...")
-    model.eval()
-    with torch.no_grad():
-        batch = data_collator([train_dataset[i] for i in range(min(4, len(train_dataset)))])
-        batch = {k: v.to(model.device) for k, v in batch.items()}
-        outputs = model(**batch)
-        logger.info(
-            "DIAGNOSTIC pre-flight: loss=%.4f, logits_mean=%.4f, "
-            "logits_std=%.4f, any_nan=%s",
-            outputs.loss.item(),
-            outputs.logits.mean().item(),
-            outputs.logits.std().item(),
-            bool(torch.isnan(outputs.logits).any()),
-        )
-        if torch.isnan(outputs.logits).any():
-            raise RuntimeError(
-                "Model produces NaN logits BEFORE training! "
-                "The model weights are corrupted or incompatible."
-            )
+    # Pre-flight: forward AND backward pass to catch NaN before training
+    logger.info("Running pre-flight forward+backward pass...")
     model.train()
+    batch = data_collator([train_dataset[i] for i in range(min(4, len(train_dataset)))])
+    batch = {k: v.to(model.device) for k, v in batch.items()}
+    outputs = model(**batch)
+    logger.info(
+        "DIAGNOSTIC pre-flight forward: loss=%.4f, logits_mean=%.4f, "
+        "logits_std=%.4f, any_nan=%s",
+        outputs.loss.item(),
+        outputs.logits.mean().item(),
+        outputs.logits.std().item(),
+        bool(torch.isnan(outputs.logits).any()),
+    )
+    if torch.isnan(outputs.logits).any():
+        raise RuntimeError(
+            "NaN logits BEFORE training — model weights are corrupted."
+        )
+    # Test backward pass
+    outputs.loss.backward()
+    grad_norms = {}
+    nan_grads = []
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            gn = p.grad.norm().item()
+            if np.isnan(gn) or np.isinf(gn):
+                nan_grads.append(name)
+            if "classifier" in name or "pooler" in name:
+                grad_norms[name] = f"{gn:.4f}"
+    if nan_grads:
+        logger.error(
+            "NaN/Inf gradients in pre-flight backward! params: %s",
+            nan_grads[:10],
+        )
+        raise RuntimeError(
+            f"NaN gradients BEFORE training in: {nan_grads[:5]}"
+        )
+    logger.info("DIAGNOSTIC pre-flight backward OK. head grads: %s", grad_norms)
+    optimizer.zero_grad()
 
     logger.info("Starting training ...")
     train_result = trainer.train()
