@@ -18,11 +18,11 @@ learned_filter:
   model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
   model_path: "models/answer_filter"
   threshold: 0.5
-  max_length: 512
+  max_length: 384
   batch_size: 8
   num_epochs: 10
   learning_rate: 2.0e-5
-  classifier_lr: 1.0e-3
+  classifier_lr: 1.0e-4
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0

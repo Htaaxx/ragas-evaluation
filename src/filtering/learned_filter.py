@@ -35,6 +35,7 @@ from transformers import (
     DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
@@ -54,69 +55,74 @@ def _load_learned_filter_config() -> dict:
     return cfg.get("learned_filter", {})
 
 
-def _fix_deberta_layernorm_keys(model) -> None:
-    """Replace DebertaV2LayerNorm with standard nn.LayerNorm in-place.
+def _load_deberta_model(model_name_or_path: str, num_labels: int = 2):
+    """Load a DeBERTa model with robust LayerNorm key handling.
 
-    DebertaV2LayerNorm uses .gamma/.beta naming that causes checkpoint
-    save/reload mismatches with HuggingFace Trainer. Replacing with
-    standard nn.LayerNorm (which uses .weight/.bias) fixes this entirely.
+    Problem: some DeBERTa checkpoints store LayerNorm parameters as
+    ``.gamma/.beta`` while the model architecture expects ``.weight/.bias``.
+    ``from_pretrained`` silently drops these, leaving LayerNorm at defaults.
+
+    Fix: after ``from_pretrained``, we download the raw checkpoint, find
+    any ``.gamma/.beta`` keys, and copy them into the model's
+    ``.weight/.bias`` slots. No module replacement — the architecture
+    stays exactly as HuggingFace built it, so save/reload always works.
     """
-    import torch.nn as nn
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name_or_path,
+        num_labels=num_labels,
+        ignore_mismatched_sizes=True,
+    )
 
-    replacements = []
-    for name, module in model.named_modules():
-        class_name = type(module).__name__
-        if "LayerNorm" in class_name and class_name != "LayerNorm":
-            # Get weight data from whichever attribute exists
-            if hasattr(module, "gamma") and module.gamma is not None:
-                weight_data = module.gamma.data.clone()
-            elif hasattr(module, "weight") and module.weight is not None:
-                weight_data = module.weight.data.clone()
+    # --- Remap .gamma/.beta → .weight/.bias from raw checkpoint ---
+    raw_state = None
+    try:
+        model_path = Path(model_name_or_path)
+        if model_path.is_dir():
+            safe_path = model_path / "model.safetensors"
+            pt_path = model_path / "pytorch_model.bin"
+            if safe_path.exists():
+                from safetensors.torch import load_file
+                raw_state = load_file(str(safe_path))
+            elif pt_path.exists():
+                raw_state = torch.load(
+                    str(pt_path), map_location="cpu", weights_only=True,
+                )
+        else:
+            from huggingface_hub import hf_hub_download
+            try:
+                wf = hf_hub_download(model_name_or_path, "model.safetensors")
+                from safetensors.torch import load_file
+                raw_state = load_file(wf)
+            except Exception:
+                wf = hf_hub_download(model_name_or_path, "pytorch_model.bin")
+                raw_state = torch.load(wf, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        logger.warning("Could not load raw checkpoint for key fix: %s", exc)
+
+    if raw_state is not None:
+        model_state = model.state_dict()
+        fixed = 0
+        for key, value in raw_state.items():
+            if key.endswith(".gamma"):
+                target = key[:-6] + ".weight"
+            elif key.endswith(".beta"):
+                target = key[:-5] + ".bias"
             else:
                 continue
+            if target in model_state and model_state[target].shape == value.shape:
+                model_state[target] = value
+                fixed += 1
 
-            if hasattr(module, "beta") and module.beta is not None:
-                bias_data = module.beta.data.clone()
-            elif hasattr(module, "bias") and module.bias is not None:
-                bias_data = module.bias.data.clone()
-            else:
-                bias_data = torch.zeros_like(weight_data)
+        if fixed > 0:
+            model.load_state_dict(model_state, strict=False)
+            logger.info(
+                "LayerNorm fix: copied %d .gamma/.beta → .weight/.bias "
+                "from raw checkpoint", fixed,
+            )
+        else:
+            logger.info("LayerNorm keys: no .gamma/.beta remapping needed")
 
-            eps = getattr(module, "variance_epsilon",
-                          getattr(module, "eps", 1e-12))
-            replacements.append((name, weight_data, bias_data, eps))
-
-    # Perform replacements (use eps=1e-7 minimum for numerical stability)
-    for name, weight_data, bias_data, eps in replacements:
-        safe_eps = max(eps, 1e-7)
-        new_ln = nn.LayerNorm(weight_data.shape[0], eps=safe_eps)
-        new_ln.weight.data.copy_(weight_data)
-        new_ln.bias.data.copy_(bias_data)
-
-        # Navigate to parent and replace
-        parts = name.split(".")
-        parent = model
-        for part in parts[:-1]:
-            parent = getattr(parent, part)
-        setattr(parent, parts[-1], new_ln)
-
-    if replacements:
-        logger.info(
-            "Replaced %d DebertaV2LayerNorm modules with nn.LayerNorm "
-            "(guarantees .weight/.bias naming in state_dict)",
-            len(replacements),
-        )
-
-    # Final verification
-    bad_keys = [k for k in model.state_dict().keys()
-                if k.endswith(".gamma") or k.endswith(".beta")]
-    if bad_keys:
-        logger.error(
-            "STILL found %d .gamma/.beta keys after fix: %s",
-            len(bad_keys), bad_keys[:4],
-        )
-    else:
-        logger.info("Verified: state_dict has NO .gamma/.beta keys")
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +224,7 @@ class AnswerQualityClassifier:
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        _fix_deberta_layernorm_keys(self.model)
+        self.model = _load_deberta_model(model_path, num_labels=2)
         self.model.to(self.device)
         self.model.eval()
 
@@ -290,6 +295,35 @@ class AnswerQualityClassifier:
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
+
+class _NaNDetectionCallback(TrainerCallback):
+    """Stop training immediately if loss becomes NaN/Inf."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+        loss = logs.get("loss")
+        if loss is not None and (np.isnan(loss) or np.isinf(loss)):
+            logger.error(
+                "NaN/Inf loss detected at step %d (epoch %.2f). "
+                "Stopping training.",
+                state.global_step, state.epoch or 0,
+            )
+            control.should_training_stop = True
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if model is None:
+            return
+        for name, param in model.named_parameters():
+            if param.requires_grad and torch.isnan(param).any():
+                logger.error(
+                    "NaN detected in parameter '%s' at step %d. "
+                    "Stopping training.",
+                    name, state.global_step,
+                )
+                control.should_training_stop = True
+                return
+
 
 def _compute_metrics(eval_pred) -> Dict[str, float]:
     """Metric callback for HuggingFace Trainer."""
@@ -412,10 +446,7 @@ def train_classifier(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name, num_labels=2, ignore_mismatched_sizes=True,
-    )
-    _fix_deberta_layernorm_keys(model)
+    model = _load_deberta_model(model_name, num_labels=2)
 
     train_dataset = _QADataset(
         train_contexts,
@@ -477,8 +508,6 @@ def train_classifier(
         {"params": classifier_params, "lr": classifier_lr, "weight_decay": 0.0},
     ])
 
-    model.gradient_checkpointing_enable()
-
     training_args = TrainingArguments(
         output_dir=str(output_path / "checkpoints"),
         num_train_epochs=num_epochs,
@@ -492,14 +521,13 @@ def train_classifier(
         label_smoothing_factor=label_smoothing,
         eval_strategy="epoch",
         save_strategy="epoch",
-        logging_steps=50,
+        logging_steps=10,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
         save_total_limit=save_total_limit,
         seed=seed,
         fp16=use_fp16,
-        gradient_checkpointing=True,
         report_to="none",
     )
 
@@ -515,6 +543,7 @@ def train_classifier(
             EarlyStoppingCallback(
                 early_stopping_patience=early_stopping_patience,
             ),
+            _NaNDetectionCallback(),
         ],
     )
 
