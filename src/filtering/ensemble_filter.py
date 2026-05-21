@@ -1,12 +1,13 @@
 """
-Ensemble answer quality filter combining multiple black-box signals.
+Ensemble faithfulness filter combining multiple signals.
 
-Extracts features from (question, answer) pairs using a learned
+Extracts features from (context, answer) pairs using a learned
 DeBERTa classifier, an NLI model, and lexical heuristics, then
 combines them via a lightweight meta-classifier
 (HistGradientBoostingClassifier).
 
-Operates as a black-box: no context or ground truth at inference.
+Retrieval is assumed correct. All sub-filters check whether the
+generated answer is faithful to the retrieved context.
 """
 
 from __future__ import annotations
@@ -182,33 +183,33 @@ class EnsembleFilter:
 
     def _extract_features_batch(
         self,
-        questions: List[str],
+        contexts: List[str],
         answers: List[str],
     ) -> np.ndarray:
-        """Build the feature matrix for a list of (q, a) pairs."""
-        deberta_confs = [0.0] * len(questions)
+        """Build the feature matrix for a list of (context, answer) pairs."""
+        deberta_confs = [0.0] * len(contexts)
         if self.deberta_clf is not None:
-            decisions = self.deberta_clf.predict_batch(questions, answers)
+            decisions = self.deberta_clf.predict_batch(contexts, answers)
             deberta_confs = _coerce_finite_confidences(
                 [d.confidence for d in decisions],
                 source="deberta_clf",
             )
 
-        nli_confs = [0.0] * len(questions)
+        nli_confs = [0.0] * len(contexts)
         if self.nli_filter is not None:
-            decisions = self.nli_filter.predict_batch(questions, answers)
+            decisions = self.nli_filter.predict_batch(contexts, answers)
             nli_confs = _coerce_finite_confidences(
                 [d.confidence for d in decisions],
                 source="nli_filter",
             )
 
         rows: List[np.ndarray] = []
-        for i, (q, a) in enumerate(zip(questions, answers)):
+        for i, (c, a) in enumerate(zip(contexts, answers)):
             char_feats = _char_features(a)
             fv = FeatureVector(
                 deberta_confidence=deberta_confs[i],
                 nli_entailment=nli_confs[i],
-                qa_token_overlap=_token_overlap(q, a),
+                qa_token_overlap=_token_overlap(c, a),
                 **char_feats,
             )
             rows.append(fv.to_array())
@@ -224,13 +225,12 @@ class EnsembleFilter:
                 bad_cols,
                 [FeatureVector.feature_names()[c] for c in bad_cols],
             )
-            # HistGradientBoostingClassifier supports NaN natively.
             X = np.where(np.isinf(X), np.nan, X)
         return X
 
     def fit(
         self,
-        questions: List[str],
+        contexts: List[str],
         answers: List[str],
         labels: Sequence[int],
     ) -> Dict[str, float]:
@@ -238,8 +238,8 @@ class EnsembleFilter:
 
         Returns training metrics dict.
         """
-        logger.info("Extracting ensemble features for %d samples...", len(questions))
-        X = self._extract_features_batch(questions, answers)
+        logger.info("Extracting ensemble features for %d samples...", len(contexts))
+        X = self._extract_features_batch(contexts, answers)
         y = np.array(labels)
 
         self.meta_clf.fit(X, y)
@@ -255,30 +255,30 @@ class EnsembleFilter:
         logger.info("Ensemble train metrics: %s", metrics)
         return metrics
 
-    def predict(self, question: str, answer: str) -> FilterDecision:
-        """Score a single (question, answer) pair."""
+    def predict(self, context: str, answer: str) -> FilterDecision:
+        """Check faithfulness for a single (context, answer) pair."""
         if not self._is_fitted:
             raise RuntimeError("EnsembleFilter has not been fitted yet.")
 
-        X = self._extract_features_batch([question], [answer])
+        X = self._extract_features_batch([context], [answer])
         prob = self.meta_clf.predict_proba(X)[0, 1]
 
         return FilterDecision(
             accept=prob >= self.threshold,
             confidence=float(prob),
-            reasoning=f"ensemble_P(correct)={prob:.3f}, threshold={self.threshold}",
+            reasoning=f"ensemble_P(faithful)={prob:.3f}, threshold={self.threshold}",
         )
 
     def predict_batch(
         self,
-        questions: List[str],
+        contexts: List[str],
         answers: List[str],
     ) -> List[FilterDecision]:
-        """Score a batch of (question, answer) pairs."""
+        """Check faithfulness for a batch of (context, answer) pairs."""
         if not self._is_fitted:
             raise RuntimeError("EnsembleFilter has not been fitted yet.")
 
-        X = self._extract_features_batch(questions, answers)
+        X = self._extract_features_batch(contexts, answers)
         probs = self.meta_clf.predict_proba(X)[:, 1]
 
         decisions: List[FilterDecision] = []
@@ -287,7 +287,7 @@ class EnsembleFilter:
                 accept=prob >= self.threshold,
                 confidence=float(prob),
                 reasoning=(
-                    f"ensemble_P(correct)={prob:.3f}, "
+                    f"ensemble_P(faithful)={prob:.3f}, "
                     f"threshold={self.threshold}"
                 ),
             ))

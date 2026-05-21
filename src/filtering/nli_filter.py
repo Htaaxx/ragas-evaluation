@@ -1,12 +1,15 @@
 """
-Zero-shot NLI-based answer quality filter.
+Zero-shot NLI-based faithfulness filter.
 
-Uses a pre-trained NLI model to check whether the question
-"entails" the answer. No fine-tuning required -- this leverages
-the model's existing understanding of textual entailment.
+Uses a pre-trained NLI model to check whether the retrieved context
+entails the generated answer. Retrieval is assumed correct, so the
+task is purely faithfulness verification.
 
-The filter operates as a black-box: ``predict(question, answer)``
-returns a ``FilterDecision`` without context or ground truth.
+NLI framing:
+  premise    = context  (ground truth from retrieval)
+  hypothesis = answer   (generated text to verify)
+  entailment → answer is faithful
+  contradiction → answer is hallucinated
 """
 
 from __future__ import annotations
@@ -36,19 +39,19 @@ def _load_nli_filter_config() -> dict:
 
 
 class NLIAnswerFilter:
-    """Zero-shot answer quality filter using NLI entailment scores.
+    """Zero-shot faithfulness filter using NLI entailment scores.
 
-    Frames answer verification as an NLI problem:
-    - premise = question
-    - hypothesis = answer
-    - entailment score = confidence that the answer is valid
+    Frames faithfulness verification as an NLI problem:
+    - premise = context (retrieved passage, assumed correct)
+    - hypothesis = answer (generated text to verify)
+    - entailment score = confidence that the answer is faithful
 
     Usage::
 
         filt = NLIAnswerFilter()
         decision = filt.predict(
-            "When was Python released?",
-            "Python 3.0 was released in 2008.",
+            context="Python 3.0 was released on December 3, 2008.",
+            answer="Python 3.0 was released in 2008.",
         )
         print(decision.accept, decision.confidence)
     """
@@ -100,10 +103,10 @@ class NLIAnswerFilter:
         ent_idx = self._label_map.get("entailment", 2)
         return probs[:, ent_idx]
 
-    def predict(self, question: str, answer: str) -> FilterDecision:
-        """Score a single (question, answer) pair via NLI."""
+    def predict(self, context: str, answer: str) -> FilterDecision:
+        """Check if context entails the answer (faithfulness)."""
         inputs = self.tokenizer(
-            question, answer,
+            context, answer,
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -124,19 +127,19 @@ class NLIAnswerFilter:
 
     def predict_batch(
         self,
-        questions: List[str],
+        contexts: List[str],
         answers: List[str],
         batch_size: int = 32,
     ) -> List[FilterDecision]:
-        """Score a batch of (question, answer) pairs via NLI."""
+        """Check faithfulness for a batch of (context, answer) pairs."""
         decisions: List[FilterDecision] = []
 
-        for start in range(0, len(questions), batch_size):
-            batch_q = questions[start: start + batch_size]
+        for start in range(0, len(contexts), batch_size):
+            batch_c = contexts[start: start + batch_size]
             batch_a = answers[start: start + batch_size]
 
             inputs = self.tokenizer(
-                batch_q, batch_a,
+                batch_c, batch_a,
                 return_tensors="pt",
                 truncation=True,
                 padding=True,

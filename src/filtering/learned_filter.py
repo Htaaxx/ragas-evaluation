@@ -2,12 +2,13 @@
 Learned answer quality classifier (core thesis component).
 
 Provides:
-- ``AnswerQualityClassifier`` — inference-time accept/reject filter
-  that takes (question, answer, optional context) and returns a
-  ``FilterDecision``.
+- ``AnswerQualityClassifier`` — inference-time faithfulness filter
+  that takes (context, answer) and returns a ``FilterDecision``.
+  Retrieval is assumed correct; the task is verifying whether the
+  generated answer is faithful to the retrieved context.
 - ``train_classifier()`` — fine-tunes DeBERTa on
-  ``labeled_asqa.csv`` using HuggingFace Trainer. Supports
-  context-aware training with context dropout augmentation.
+  ``labeled_asqa.csv`` using HuggingFace Trainer with NLI-style
+  framing: premise=context, hypothesis=answer.
 """
 
 from __future__ import annotations
@@ -146,34 +147,28 @@ def _extract_top1_context(context_str: str, max_chars: int = 800) -> str:
 # ---------------------------------------------------------------------------
 
 class _QADataset(Dataset):
-    """(question, context, answer) triples with binary labels.
+    """Faithfulness verification dataset: (context, answer) pairs.
 
-    Input format for tokenizer:
-      text_a = question + " Context: " + context
-      text_b = answer
+    NLI-style framing (retrieval assumed correct):
+      text_a = context  (premise — the ground truth)
+      text_b = answer   (hypothesis — to verify)
 
-    This lets the model compare the answer against reference context.
-    Context dropout randomly masks context during training to prevent
-    over-reliance on retrieval.
+    The model learns whether the answer is faithful to the context.
     """
 
     def __init__(
         self,
-        questions: Sequence[str],
+        contexts: Sequence[str],
         answers: Sequence[str],
         labels: Sequence[int],
         tokenizer: AutoTokenizer,
-        max_length: int = 384,
-        contexts: Sequence[str] | None = None,
-        context_dropout: float = 0.0,
+        max_length: int = 512,
     ) -> None:
-        self.questions = [str(q) if q is not None else "" for q in questions]
+        self.contexts = [str(c) if c is not None else "" for c in contexts]
         self.answers = [str(a) if a is not None else "" for a in answers]
         self.labels = [int(lbl) for lbl in labels]
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.contexts = [str(c) if c is not None else "" for c in contexts] if contexts is not None else None
-        self.context_dropout = context_dropout
 
         assert all(lbl in (0, 1) for lbl in self.labels), \
             f"Labels must be 0 or 1, got unique: {set(self.labels)}"
@@ -182,22 +177,9 @@ class _QADataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx: int) -> dict:
-        question = self.questions[idx]
-        answer = self.answers[idx]
-
-        if self.contexts is not None:
-            import random
-            if self.context_dropout > 0 and random.random() < self.context_dropout:
-                text_a = question
-            else:
-                context = self.contexts[idx]
-                text_a = f"{question} Context: {context}"
-        else:
-            text_a = question
-
         encoding = self.tokenizer(
-            text_a,
-            answer,
+            self.contexts[idx],
+            self.answers[idx],
             truncation=True,
             max_length=self.max_length,
         )
@@ -210,15 +192,17 @@ class _QADataset(Dataset):
 # ---------------------------------------------------------------------------
 
 class AnswerQualityClassifier:
-    """Learned answer quality filter with optional context.
+    """Learned faithfulness filter: context (premise) vs answer (hypothesis).
+
+    Retrieval is assumed correct. The model checks whether the generated
+    answer is faithful to the retrieved context.
 
     Usage::
 
         clf = AnswerQualityClassifier("models/answer_filter")
         decision = clf.predict(
-            "When was Python released?",
-            "Python 3.0 was released in 2008.",
             context="Python: Python 3.0 was released on December 3, 2008.",
+            answer="Python 3.0 was released in 2008.",
         )
         print(decision.accept, decision.confidence)
     """
@@ -239,28 +223,20 @@ class AnswerQualityClassifier:
         self.model.to(self.device)
         self.model.eval()
 
-        self.max_length: int = cfg.get("max_length", 384)
+        self.max_length: int = cfg.get("max_length", 512)
         logger.info(
             "AnswerQualityClassifier loaded from %s (threshold=%.2f, device=%s)",
             model_path, self.threshold, self.device,
         )
 
-    def _build_text_a(self, question: str, context: str | None = None) -> str:
-        """Build text_a: question + optional context."""
-        if context:
-            return f"{question} Context: {context}"
-        return question
-
     def predict(
         self,
-        question: str,
+        context: str,
         answer: str,
-        context: str | None = None,
     ) -> FilterDecision:
-        """Score a single (question, answer) pair with optional context."""
-        text_a = self._build_text_a(question, context)
+        """Check if answer is faithful to context (NLI framing)."""
         inputs = self.tokenizer(
-            text_a, answer,
+            context, answer,
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -273,34 +249,24 @@ class AnswerQualityClassifier:
         return FilterDecision(
             accept=prob_correct >= self.threshold,
             confidence=prob_correct,
-            reasoning=f"P(correct)={prob_correct:.3f}, threshold={self.threshold}",
+            reasoning=f"P(faithful)={prob_correct:.3f}, threshold={self.threshold}",
         )
 
     def predict_batch(
         self,
-        questions: List[str],
+        contexts: List[str],
         answers: List[str],
-        contexts: List[str] | None = None,
         batch_size: int = 32,
     ) -> List[FilterDecision]:
-        """Score a batch of (question, answer) pairs with optional contexts."""
+        """Check faithfulness for a batch of (context, answer) pairs."""
         decisions: List[FilterDecision] = []
 
-        for start in range(0, len(questions), batch_size):
-            batch_q = questions[start : start + batch_size]
+        for start in range(0, len(contexts), batch_size):
+            batch_c = contexts[start : start + batch_size]
             batch_a = answers[start : start + batch_size]
 
-            if contexts is not None:
-                batch_c = contexts[start : start + batch_size]
-                batch_text_a = [
-                    self._build_text_a(q, c)
-                    for q, c in zip(batch_q, batch_c)
-                ]
-            else:
-                batch_text_a = batch_q
-
             inputs = self.tokenizer(
-                batch_text_a, batch_a,
+                batch_c, batch_a,
                 return_tensors="pt",
                 truncation=True,
                 padding=True,
@@ -315,7 +281,7 @@ class AnswerQualityClassifier:
                 decisions.append(FilterDecision(
                     accept=prob >= self.threshold,
                     confidence=prob,
-                    reasoning=f"P(correct)={prob:.3f}, threshold={self.threshold}",
+                    reasoning=f"P(faithful)={prob:.3f}, threshold={self.threshold}",
                 ))
 
         return decisions
@@ -356,29 +322,26 @@ def train_classifier(
     model_name: str | None = None,
     output_dir: str | None = None,
     config_overrides: dict | None = None,
-    use_context: bool = True,
-    context_dropout: float = 0.15,
 ) -> Path:
-    """Fine-tune a DeBERTa classifier on labeled answer-quality data.
+    """Fine-tune DeBERTa as a faithfulness classifier (NLI framing).
+
+    Retrieval is assumed correct. The model learns to verify whether
+    the generated answer is faithful to the retrieved context:
+      premise  = context (ground truth)
+      hypothesis = answer (to verify)
 
     Parameters
     ----------
     train_df / val_df:
-        DataFrames with columns ``question``, ``answer``, ``label``,
-        and optionally ``context`` (raw string from labeled_asqa.csv).
+        DataFrames with columns ``question``, ``answer``, ``context``,
+        ``label``.  The ``context`` column is required (raw string from
+        labeled_asqa.csv).
     model_name:
         HuggingFace model ID. Defaults to ``filtering.yaml`` value.
     output_dir:
         Where to save the final model. Defaults to ``filtering.yaml`` value.
     config_overrides:
         Optional dict to override any ``learned_filter`` config values.
-    use_context:
-        If True and 'context' column exists, include top-1 retrieved
-        passage in the model input.
-    context_dropout:
-        During training, probability of masking context (replaced with
-        empty string). Prevents over-reliance on retrieval. Set to 0 to
-        always use context; set to 1.0 for no-context baseline.
 
     Returns
     -------
@@ -393,7 +356,7 @@ def train_classifier(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    max_length: int = cfg.get("max_length", 384)
+    max_length: int = cfg.get("max_length", 512)
     batch_size: int = cfg.get("batch_size", 16)
     num_epochs: int = cfg.get("num_epochs", 10)
     learning_rate: float = cfg.get("learning_rate", 2e-5)
@@ -406,50 +369,46 @@ def train_classifier(
     save_total_limit: int = cfg.get("save_total_limit", 3)
     seed: int = cfg.get("seed", 42)
 
-    # --- Context extraction ---
-    has_context = use_context and "context" in train_df.columns
-    train_contexts = None
-    val_contexts = None
-
-    if has_context:
-        logger.info("Extracting top-1 context for training (dropout=%.2f)", context_dropout)
-        train_contexts = [
-            _extract_top1_context(c) for c in train_df["context"].tolist()
-        ]
-        val_contexts = [
-            _extract_top1_context(c) for c in val_df["context"].tolist()
-        ]
-        non_empty = sum(1 for c in train_contexts if c)
-        logger.info(
-            "Context extracted: %d/%d train samples have non-empty context",
-            non_empty, len(train_contexts),
+    # --- Context extraction (required) ---
+    if "context" not in train_df.columns:
+        raise ValueError(
+            "train_df must have a 'context' column. "
+            "Retrieval is assumed correct; context is the premise."
         )
-    else:
-        logger.info("Training WITHOUT context (no-context mode)")
+
+    logger.info("Extracting top-1 context (premise) for faithfulness training")
+    train_contexts = [
+        _extract_top1_context(c) for c in train_df["context"].tolist()
+    ]
+    val_contexts = [
+        _extract_top1_context(c) for c in val_df["context"].tolist()
+    ]
+    non_empty_train = sum(1 for c in train_contexts if c)
+    non_empty_val = sum(1 for c in val_contexts if c)
+    logger.info(
+        "Context extracted: train=%d/%d, val=%d/%d non-empty",
+        non_empty_train, len(train_contexts),
+        non_empty_val, len(val_contexts),
+    )
 
     # --- Pre-training diagnostics ---
     for name, split in [("train", train_df), ("val", val_df)]:
         nan_labels = split["label"].isna().sum()
-        nan_q = split["question"].isna().sum()
         nan_a = split["answer"].isna().sum()
         label_dist = split["label"].value_counts().to_dict()
         logger.info(
-            "DIAGNOSTIC [%s]: labels=%s, NaN(label=%d, q=%d, a=%d), "
+            "DIAGNOSTIC [%s]: labels=%s, NaN(label=%d, answer=%d), "
             "label_dtype=%s",
-            name, label_dist, nan_labels, nan_q, nan_a,
-            split["label"].dtype,
+            name, label_dist, nan_labels, nan_a, split["label"].dtype,
         )
         if nan_labels > 0:
             raise ValueError(f"{name} has {nan_labels} NaN labels!")
-        if nan_q > 0 or nan_a > 0:
-            logger.warning("%s has NaN text fields! Filling with empty string.", name)
-            split = split.fillna({"question": "", "answer": ""})
 
     logger.info("Training config: %s", json.dumps(cfg, indent=2))
     logger.info("Model: %s  ->  %s", model_name, output_path)
     logger.info(
-        "Train samples: %d  Val samples: %d  use_context: %s  context_dropout: %.2f",
-        len(train_df), len(val_df), has_context, context_dropout if has_context else 0.0,
+        "Train: %d samples, Val: %d samples, Framing: context→answer (NLI)",
+        len(train_df), len(val_df),
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -459,36 +418,31 @@ def train_classifier(
     _fix_deberta_layernorm_keys(model)
 
     train_dataset = _QADataset(
-        train_df["question"].tolist(),
+        train_contexts,
         train_df["answer"].tolist(),
         train_df["label"].astype(int).tolist(),
         tokenizer,
         max_length=max_length,
-        contexts=train_contexts,
-        context_dropout=context_dropout if has_context else 0.0,
     )
     val_dataset = _QADataset(
-        val_df["question"].tolist(),
+        val_contexts,
         val_df["answer"].tolist(),
         val_df["label"].astype(int).tolist(),
         tokenizer,
         max_length=max_length,
-        contexts=val_contexts,
-        context_dropout=0.0,
     )
 
-    # Sanity check: verify samples and context inclusion
+    # Sanity check: verify samples show context→answer framing
     for i in range(min(3, len(train_dataset))):
         sample = train_dataset[i]
         decoded = tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
         logger.info(
-            "DIAGNOSTIC sample[%d]: input_ids len=%d, label=%d, "
-            "text_preview='%s'",
+            "DIAGNOSTIC sample[%d]: tokens=%d, label=%d, "
+            "preview='%s'",
             i, len(sample["input_ids"]), sample["labels"],
-            decoded[:150],
+            decoded[:200],
         )
 
-    # Check if any layers are frozen
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     logger.info(
@@ -593,8 +547,7 @@ def train_classifier(
     training_log = {
         "config": cfg,
         "model_name": model_name,
-        "use_context": has_context,
-        "context_dropout": context_dropout if has_context else 0.0,
+        "framing": "context→answer (NLI faithfulness)",
         "train_samples": len(train_df),
         "val_samples": len(val_df),
         "train_metrics": {
