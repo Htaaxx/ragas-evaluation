@@ -477,6 +477,8 @@ def train_classifier(
         {"params": classifier_params, "lr": classifier_lr, "weight_decay": 0.0},
     ])
 
+    model.gradient_checkpointing_enable()
+
     training_args = TrainingArguments(
         output_dir=str(output_path / "checkpoints"),
         num_train_epochs=num_epochs,
@@ -497,6 +499,7 @@ def train_classifier(
         save_total_limit=save_total_limit,
         seed=seed,
         fp16=use_fp16,
+        gradient_checkpointing=True,
         report_to="none",
     )
 
