@@ -19,7 +19,7 @@ learned_filter:
   model_path: "models/answer_filter"
   threshold: 0.5
   max_length: 512
-  batch_size: 16
+  batch_size: 8
   num_epochs: 10
   learning_rate: 2.0e-5
   classifier_lr: 1.0e-3
