@@ -495,14 +495,20 @@ def overfit_sanity_check(
     n_pairs: int = 16,
     epochs: int = 50,
     model_name: str | None = None,
-    learning_rate: float = 5e-5,
+    learning_rate: float | None = None,
     max_length: int | None = None,
+    batch_size: int = 4,
+    warmup_steps: int = 10,
 ) -> Dict[str, float]:
     """Try to overfit ``n_pairs`` paired (correct, halluc) examples.
 
     A 184M-parameter model MUST be able to fit a tiny labelled set. If
     train F1 does not reach >= 0.95 within ``epochs``, the code, data, or
     input format is broken — do NOT scale up to full training.
+
+    Uses the SAME LR + warmup + clipping + truncation strategy as the
+    full training pipeline (apples-to-apples). If this run fails, full
+    training will fail too.
 
     Parameters
     ----------
@@ -513,23 +519,24 @@ def overfit_sanity_check(
         Number of paired base IDs to use (total samples = 2 * n_pairs).
     epochs:
         Training epochs on the tiny set.
-    model_name:
-        HuggingFace model ID; defaults to filtering.yaml value.
-    learning_rate:
-        LR for the overfit run. Higher than full-train default since the
-        set is tiny.
-    max_length:
-        Defaults to filtering.yaml value.
+    model_name / learning_rate / max_length / batch_size:
+        Default to ``filtering.yaml`` values so the overfit test runs
+        with the exact same hyperparameters as full training.
+    warmup_steps:
+        Linear-warmup steps. DeBERTa-v3 needs warmup to avoid NaN.
 
     Returns
     -------
     Dict with ``train_f1``, ``train_loss``, ``train_fpr``,
     ``train_recall``, ``train_precision``, plus per-pair logits for
-    debugging when the test fails.
+    debugging when the test fails. Aborts early (returns dict with
+    ``aborted=True``) if NaN is detected during training.
     """
     cfg = _load_learned_filter_config()
     model_name = model_name or cfg["model_name"]
-    max_length = max_length or cfg.get("max_length", 384)
+    max_length = max_length or cfg.get("max_length", 512)
+    if learning_rate is None:
+        learning_rate = cfg.get("learning_rate", 1e-5)
 
     base_col = df["id"].str.replace(r"b$", "", regex=True)
     df_idx = df.copy()
@@ -562,11 +569,12 @@ def overfit_sanity_check(
     ids = mini_df["id"].tolist()
 
     logger.info(
-        "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs at lr=%.0e",
+        "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs "
+        "at lr=%.0e, batch_size=%d, max_length=%d, warmup_steps=%d",
         len(mini_df),
         sum(1 for lbl in labels if lbl == 1),
         sum(1 for lbl in labels if lbl == 0),
-        epochs, learning_rate,
+        epochs, learning_rate, batch_size, max_length, warmup_steps,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -583,17 +591,51 @@ def overfit_sanity_check(
         for c, a in zip(contexts, answers)
     ]
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    # Pre-flight forward pass (eval mode, no_grad) to detect bad init
+    model.eval()
+    with torch.no_grad():
+        sample0 = {k: v.to(device) for k, v in encodings[0].items()}
+        pre_out = model(**sample0)
+    if torch.isnan(pre_out.logits).any():
+        msg = "Pre-flight forward already NaN — model init is broken"
+        logger.error(msg)
+        return {
+            "train_f1": 0.0, "train_precision": 0.0, "train_recall": 0.0,
+            "train_fpr": 0.0, "n_samples": len(labels),
+            "tp": 0, "tn": 0, "fp": 0, "fn": 0,
+            "aborted": True, "abort_reason": msg,
+        }
+    logger.info(
+        "Pre-flight forward OK: loss=%.4f, logits=%s",
+        torch.nn.functional.cross_entropy(
+            pre_out.logits, torch.tensor([labels[0]], device=device),
+        ).item(),
+        pre_out.logits[0].detach().cpu().tolist(),
+    )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, eps=1e-8, weight_decay=0.01,
+    )
     loss_fn = torch.nn.CrossEntropyLoss()
 
+    steps_per_epoch = max(1, (len(encodings) + batch_size - 1) // batch_size)
+    total_steps = steps_per_epoch * epochs
+
+    def _lr_at(step: int) -> float:
+        if step < warmup_steps:
+            return learning_rate * (step + 1) / max(1, warmup_steps)
+        return learning_rate
+
     model.train()
+    global_step = 0
+    aborted_reason: str | None = None
     for epoch in range(epochs):
         epoch_loss = 0.0
-        # Iterate over batches of 8 (matches full training shape)
-        for start in range(0, len(encodings), 8):
-            batch = encodings[start : start + 8]
+        n_batches = 0
+        for start in range(0, len(encodings), batch_size):
+            batch = encodings[start : start + batch_size]
             batch_labels = torch.tensor(
-                labels[start : start + 8], device=device,
+                labels[start : start + batch_size], device=device,
             )
             input_ids = torch.nn.utils.rnn.pad_sequence(
                 [enc["input_ids"].squeeze(0) for enc in batch],
@@ -606,19 +648,106 @@ def overfit_sanity_check(
                 padding_value=0,
             ).to(device)
 
+            # Apply warmup LR for this step
+            cur_lr = _lr_at(global_step)
+            for pg in optimizer.param_groups:
+                pg["lr"] = cur_lr
+
             optimizer.zero_grad()
             out = model(input_ids=input_ids, attention_mask=attention_mask)
+
+            # Step 1: forward NaN check
+            if torch.isnan(out.logits).any():
+                aborted_reason = (
+                    f"NaN in FORWARD logits at epoch {epoch+1} "
+                    f"step {global_step+1} (lr={cur_lr:.2e}, "
+                    f"seq_len={input_ids.shape[1]})"
+                )
+                logger.error(aborted_reason)
+                break
+
             loss = loss_fn(out.logits, batch_labels)
+
+            # Step 2: loss NaN check
+            if torch.isnan(loss) or torch.isinf(loss):
+                aborted_reason = (
+                    f"NaN/Inf in LOSS at epoch {epoch+1} "
+                    f"step {global_step+1} (logits_min={out.logits.min().item():.4f}, "
+                    f"logits_max={out.logits.max().item():.4f})"
+                )
+                logger.error(aborted_reason)
+                break
+
             loss.backward()
+
+            # Step 3: gradient NaN check (sample a representative grad)
+            total_norm_sq = 0.0
+            nan_param_name: str | None = None
+            for name, p in model.named_parameters():
+                if p.grad is None:
+                    continue
+                g = p.grad
+                if torch.isnan(g).any() or torch.isinf(g).any():
+                    nan_param_name = name
+                    break
+                total_norm_sq += g.detach().float().norm(2).item() ** 2
+            if nan_param_name is not None:
+                aborted_reason = (
+                    f"NaN/Inf in GRADIENT of '{nan_param_name}' "
+                    f"at epoch {epoch+1} step {global_step+1} "
+                    f"(loss={loss.item():.4f}, lr={cur_lr:.2e})"
+                )
+                logger.error(aborted_reason)
+                break
+
+            grad_norm = total_norm_sq ** 0.5
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+
+            # Step 4: weights NaN check (just one tensor as a fast canary)
+            head_w = model.classifier.weight
+            if torch.isnan(head_w).any():
+                aborted_reason = (
+                    f"NaN in classifier.weight after optimizer.step at "
+                    f"epoch {epoch+1} step {global_step+1} "
+                    f"(loss={loss.item():.4f}, grad_norm={grad_norm:.4f}, "
+                    f"lr={cur_lr:.2e})"
+                )
+                logger.error(aborted_reason)
+                break
+
             epoch_loss += loss.item()
+            n_batches += 1
+
+            # Verbose first 3 steps to see the trajectory
+            if global_step < 3:
+                logger.info(
+                    "  step %d: loss=%.4f, grad_norm=%.4f, "
+                    "lr=%.2e, seq_len=%d, logits[0]=%s",
+                    global_step + 1, loss.item(), grad_norm, cur_lr,
+                    input_ids.shape[1],
+                    [f"{x:.3f}" for x in out.logits[0].detach().cpu().tolist()],
+                )
+
+            global_step += 1
+
+        if aborted_reason is not None:
+            break
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
+            avg_loss = epoch_loss / max(1, n_batches)
             logger.info(
-                "  epoch %d/%d: loss=%.4f",
-                epoch + 1, epochs, epoch_loss / max(1, len(encodings) // 8),
+                "  epoch %d/%d: loss=%.4f (lr ramped to %.2e)",
+                epoch + 1, epochs, avg_loss, _lr_at(global_step - 1),
             )
+
+    if aborted_reason is not None:
+        return {
+            "train_f1": 0.0, "train_precision": 0.0, "train_recall": 0.0,
+            "train_fpr": 0.0, "n_samples": len(labels),
+            "tp": 0, "tn": 0, "fp": 0, "fn": 0,
+            "aborted": True, "abort_reason": aborted_reason,
+        }
 
     # Final evaluation on training set
     model.eval()
