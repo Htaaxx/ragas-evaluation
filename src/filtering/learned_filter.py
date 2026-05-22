@@ -537,8 +537,15 @@ def overfit_sanity_check(
     cfg = _load_learned_filter_config()
     model_name = model_name or cfg["model_name"]
     max_length = max_length or cfg.get("max_length", 512)
+    # NOTE: overfit tests INTENTIONALLY use a higher LR than full training.
+    # full-training lr (cfg[learning_rate]=1e-5) is tuned to generalize over
+    # thousands of samples; the overfit gate runs on 32 samples with a
+    # freshly re-initialized 2-class head (the MNLI 3-class head is dropped),
+    # which needs an aggressive LR to escape the trivial constant-output
+    # local minimum (loss stuck at ln 2 ≈ 0.693). 5e-5 is the standard
+    # overfit-test LR for DeBERTa-base.
     if learning_rate is None:
-        learning_rate = cfg.get("learning_rate", 1e-5)
+        learning_rate = 5e-5
     if batch_size is None:
         batch_size = cfg.get("batch_size", 4)
 
