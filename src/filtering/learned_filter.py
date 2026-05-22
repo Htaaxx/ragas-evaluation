@@ -499,6 +499,8 @@ def overfit_sanity_check(
     max_length: int | None = None,
     batch_size: int = 4,
     warmup_steps: int = 10,
+    optimizer_name: str = "adamw",  # "adamw" | "sgd"
+    adamw_eps: float = 1e-6,
 ) -> Dict[str, float]:
     """Try to overfit ``n_pairs`` paired (correct, halluc) examples.
 
@@ -613,9 +615,25 @@ def overfit_sanity_check(
         pre_out.logits[0].detach().cpu().tolist(),
     )
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, eps=1e-8, weight_decay=0.01,
-    )
+    if optimizer_name.lower() == "sgd":
+        optimizer = torch.optim.SGD(
+            model.parameters(), lr=learning_rate, momentum=0.9,
+            weight_decay=0.01,
+        )
+        logger.info(
+            "Using SGD(momentum=0.9) for overfit (defensive fallback)"
+        )
+    else:
+        # eps=1e-6 (not the default 1e-8) avoids edge cases where v_hat
+        # is tiny and the update m_hat/(sqrt(v_hat)+eps) explodes.
+        # HF's official BERT/RoBERTa/DeBERTa recipes all use eps=1e-6.
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=learning_rate, eps=adamw_eps,
+            weight_decay=0.01,
+        )
+        logger.info(
+            "Using AdamW(eps=%.0e, wd=0.01) for overfit", adamw_eps,
+        )
     loss_fn = torch.nn.CrossEntropyLoss()
 
     steps_per_epoch = max(1, (len(encodings) + batch_size - 1) // batch_size)
@@ -768,19 +786,111 @@ def overfit_sanity_check(
                 break
 
             grad_norm = total_norm_sq ** 0.5
+
+            # Snapshot classifier.weight + grad BEFORE the optimizer step
+            # so we can prove they were finite going into the step.
+            head_w_before = model.classifier.weight.detach().clone()
+            head_g_pre_clip = (
+                model.classifier.weight.grad.detach().clone()
+            )
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            head_g_post_clip = (
+                model.classifier.weight.grad.detach().clone()
+            )
             optimizer.step()
 
-            # Step 4: weights NaN check (just one tensor as a fast canary)
-            head_w = model.classifier.weight
-            if torch.isnan(head_w).any():
+            # Comprehensive post-step NaN scan — find ALL bad params,
+            # not just classifier.weight.
+            nan_after: list[str] = []
+            inf_after: list[str] = []
+            with torch.no_grad():
+                for pname, p in model.named_parameters():
+                    if torch.isnan(p).any():
+                        nan_after.append(pname)
+                    elif torch.isinf(p).any():
+                        inf_after.append(pname)
+
+            if nan_after or inf_after:
                 aborted_reason = (
-                    f"NaN in classifier.weight after optimizer.step at "
+                    f"NaN/Inf in weights after optimizer.step at "
                     f"epoch {epoch+1} step {global_step+1} "
                     f"(loss={loss.item():.4f}, grad_norm={grad_norm:.4f}, "
                     f"lr={cur_lr:.2e})"
                 )
                 logger.error(aborted_reason)
+                logger.error(
+                    "POST-STEP SCAN: %d params NaN, %d params Inf "
+                    "(out of %d total)",
+                    len(nan_after), len(inf_after),
+                    sum(1 for _ in model.parameters()),
+                )
+                for pname in nan_after[:10]:
+                    logger.error("  NaN param: %s", pname)
+                for pname in inf_after[:10]:
+                    logger.error("  Inf param: %s", pname)
+
+                # Stats on classifier.weight + grads going INTO the step
+                # (proves what we fed AdamW was sane)
+                logger.error(
+                    "head_w BEFORE step: min=%.4e max=%.4e absmean=%.4e "
+                    "any_nan=%s any_inf=%s",
+                    head_w_before.min().item(),
+                    head_w_before.max().item(),
+                    head_w_before.abs().mean().item(),
+                    bool(torch.isnan(head_w_before).any()),
+                    bool(torch.isinf(head_w_before).any()),
+                )
+                logger.error(
+                    "head_g PRE-clip: min=%.4e max=%.4e absmean=%.4e "
+                    "any_nan=%s any_inf=%s",
+                    head_g_pre_clip.min().item(),
+                    head_g_pre_clip.max().item(),
+                    head_g_pre_clip.abs().mean().item(),
+                    bool(torch.isnan(head_g_pre_clip).any()),
+                    bool(torch.isinf(head_g_pre_clip).any()),
+                )
+                logger.error(
+                    "head_g POST-clip: min=%.4e max=%.4e absmean=%.4e "
+                    "any_nan=%s any_inf=%s",
+                    head_g_post_clip.min().item(),
+                    head_g_post_clip.max().item(),
+                    head_g_post_clip.abs().mean().item(),
+                    bool(torch.isnan(head_g_post_clip).any()),
+                    bool(torch.isinf(head_g_post_clip).any()),
+                )
+                # Stats on classifier.weight AFTER (the broken value)
+                head_w_after = model.classifier.weight.detach()
+                n_nan = int(torch.isnan(head_w_after).sum().item())
+                n_inf = int(torch.isinf(head_w_after).sum().item())
+                logger.error(
+                    "head_w AFTER step: %d/%d NaN, %d/%d Inf",
+                    n_nan, head_w_after.numel(),
+                    n_inf, head_w_after.numel(),
+                )
+
+                # Inspect AdamW state for classifier.weight (m and v)
+                if optimizer_name.lower() == "adamw":
+                    state = optimizer.state.get(
+                        model.classifier.weight, {}
+                    )
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            logger.error(
+                                "  optimizer.state['classifier.weight']['%s']:"
+                                " min=%.4e max=%.4e absmean=%.4e "
+                                "any_nan=%s any_inf=%s",
+                                k, v.min().item(), v.max().item(),
+                                v.abs().mean().item(),
+                                bool(torch.isnan(v).any()),
+                                bool(torch.isinf(v).any()),
+                            )
+                        else:
+                            logger.error(
+                                "  optimizer.state['classifier.weight']['%s']: %r",
+                                k, v,
+                            )
                 break
 
             epoch_loss += loss.item()
