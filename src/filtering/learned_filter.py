@@ -656,7 +656,7 @@ def overfit_sanity_check(
             optimizer.zero_grad()
             out = model(input_ids=input_ids, attention_mask=attention_mask)
 
-            # Step 1: forward NaN check
+            # Step 1: forward NaN check + post-mortem if it triggers
             if torch.isnan(out.logits).any():
                 aborted_reason = (
                     f"NaN in FORWARD logits at epoch {epoch+1} "
@@ -664,6 +664,73 @@ def overfit_sanity_check(
                     f"seq_len={input_ids.shape[1]})"
                 )
                 logger.error(aborted_reason)
+
+                # Post-mortem 1: which parameters went NaN?
+                nan_params = []
+                inf_params = []
+                with torch.no_grad():
+                    for pname, p in model.named_parameters():
+                        if torch.isnan(p).any():
+                            n_nan = int(torch.isnan(p).sum().item())
+                            nan_params.append((pname, n_nan, p.numel()))
+                        elif torch.isinf(p).any():
+                            n_inf = int(torch.isinf(p).sum().item())
+                            inf_params.append((pname, n_inf, p.numel()))
+                logger.error(
+                    "POST-MORTEM: %d params have NaN, %d params have Inf",
+                    len(nan_params), len(inf_params),
+                )
+                for pname, n_nan, total in nan_params[:10]:
+                    logger.error(
+                        "  NaN param: %s  (%d / %d elements)",
+                        pname, n_nan, total,
+                    )
+                for pname, n_inf, total in inf_params[:10]:
+                    logger.error(
+                        "  Inf param: %s  (%d / %d elements)",
+                        pname, n_inf, total,
+                    )
+
+                # Post-mortem 2: was the input itself the problem? Re-run
+                # this exact batch in eval mode (no dropout) with no_grad.
+                # If it's still NaN, the weights are corrupted.
+                # If it's clean, dropout or training-mode behavior is the culprit.
+                model.eval()
+                with torch.no_grad():
+                    eval_out = model(
+                        input_ids=input_ids, attention_mask=attention_mask,
+                    )
+                logger.error(
+                    "POST-MORTEM: eval-mode forward on same batch: "
+                    "logits.isnan().any()=%s, logits.isinf().any()=%s, "
+                    "logits.abs().max()=%.4f",
+                    bool(torch.isnan(eval_out.logits).any()),
+                    bool(torch.isinf(eval_out.logits).any()),
+                    eval_out.logits.abs().max().item()
+                    if not torch.isnan(eval_out.logits).any()
+                    else float("nan"),
+                )
+                model.train()
+
+                # Post-mortem 3: which sample in the batch causes NaN?
+                # Run each sample individually in eval mode.
+                model.eval()
+                with torch.no_grad():
+                    for j in range(input_ids.shape[0]):
+                        single_in = input_ids[j:j+1]
+                        single_mask = attention_mask[j:j+1]
+                        single_out = model(
+                            input_ids=single_in, attention_mask=single_mask,
+                        )
+                        is_nan = bool(torch.isnan(single_out.logits).any())
+                        logger.error(
+                            "  sample j=%d: seq_len=%d, "
+                            "logits=%s, isnan=%s",
+                            j, int(single_mask.sum().item()),
+                            single_out.logits.detach().cpu().tolist(),
+                            is_nan,
+                        )
+                model.train()
                 break
 
             loss = loss_fn(out.logits, batch_labels)
