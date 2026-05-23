@@ -71,7 +71,7 @@ except ImportError:
     )
 
 
-class CheckpointedEvaluationResult:
+class SelfEvaluationResult:
 
     def __init__(self, df):
         self.df = df
@@ -199,6 +199,45 @@ class RAGAS:
         ]
 
     # ========================================================
+    # HELPER FUNCTIONS
+    # ========================================================
+
+    def _is_failed_value(self, value):
+        if value is None:
+            return True
+
+        try:
+            if pd.isna(value):
+                return True
+        except Exception:
+            pass
+
+        if isinstance(value, str):
+            return value.strip().lower() in {"none", "nan", "null", ""}
+
+        return False
+
+
+    def _find_failed_cells(self, result_df):
+        failed = []
+
+        metric_names = [
+            getattr(metric, "name", None)
+            for metric in self.metrics
+        ]
+        metric_names = [
+            name for name in metric_names
+            if name in result_df.columns
+        ]
+
+        for row_idx, row in result_df.iterrows():
+            for metric_name in metric_names:
+                if self._is_failed_value(row[metric_name]):
+                    failed.append((row_idx, metric_name))
+
+        return failed
+
+    # ========================================================
     # DATASET PREP
     # ========================================================
 
@@ -236,6 +275,7 @@ class RAGAS:
         contexts: Optional[List[List[str]]] = None,
         ground_truths: Optional[List[str]] = None,
         show_progress: bool = True,
+        max_retries: int = 3,
     ):
 
         dataset = self.prepare_dataset(
@@ -256,10 +296,55 @@ class RAGAS:
             dataset=dataset,
             metrics=self.metrics,
             llm=self.llm,
-            embeddings=self.embeddings,
+            embeddings=self.embeddings
         )
+        result_df = result.to_pandas()
+        failed_cells = self._find_failed_cells(result_df)
 
-        return result
+        if not failed_cells:
+            return result
+        
+        if show_progress:
+            logger.warning("Found %d failed RAGAS cells. Retrying...", len(failed_cells))
+
+        for row_idx, metric_name in failed_cells:
+            for attempt in range(1, max_retries + 1):
+                metric = next(
+                    m for m in self.metrics
+                    if getattr(m, "name", None) == metric_name
+                )
+
+                single_dataset = self.prepare_dataset(
+                    questions=[questions[row_idx]],
+                    answers=[answers[row_idx]],
+                    contexts=[contexts[row_idx]] if contexts is not None else None,
+                    ground_truths=[ground_truths[row_idx]] if ground_truths is not None else None,
+                )
+
+                retry_result = evaluate(
+                    dataset=single_dataset,
+                    metrics=[metric],
+                    llm=self.llm,
+                    embeddings=self.embeddings,
+                )
+
+                retry_df = retry_result.to_pandas()
+                new_value = retry_df.loc[0, metric_name]
+
+                if not self._is_failed_value(new_value):
+                    result_df.loc[row_idx, metric_name] = new_value
+
+                    if show_progress:
+                        logger.info(
+                            "Repaired RAGAS cell row=%s metric=%s attempt=%s value=%s",
+                            row_idx,
+                            metric_name,
+                            attempt,
+                            new_value,
+                        )
+
+                    break
+        return SelfEvaluationResult(result_df)
 
     # ========================================================
     # DATAFRAME EVALUATION
@@ -474,7 +559,7 @@ class RAGAS:
         
         final_df = pd.DataFrame(all_results)
 
-        return CheckpointedEvaluationResult(final_df)
+        return SelfEvaluationResult(final_df)
 
 
     def evaluate_from_dataframe_checkpoint(
@@ -557,7 +642,7 @@ def evaluate_rag_pipeline(
     api_key: Optional[str] = None,
 ):
 
-    evaluator = RAGASEvaluator(
+    evaluator = RAGAS(
         metrics=metrics,
         llm_model=llm_model,
         embedding_model=embedding_model,
@@ -585,7 +670,7 @@ def compare_rag_systems(
     **kwargs,
 ):
 
-    evaluator = RAGASEvaluator(
+    evaluator = RAGAS(
         metrics=metrics,
         llm_model=llm_model,
         embedding_model=embedding_model,

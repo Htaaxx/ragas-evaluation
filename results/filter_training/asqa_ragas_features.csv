@@ -1,4 +1,4 @@
-id,label,faithfulness,answer_relevancy,context_relevancy
+﻿id,label,faithfulness,answer_relevancy,context_relevancy
 asqa_0,1,0.6666666666666666,0.7262346866813935,0.0909090909090909
 asqa_1,1,1.0,0.9574900605605712,0.1111111111111111
 asqa_2,1,1.0,0.9658197822972192,0.1111111111111111
