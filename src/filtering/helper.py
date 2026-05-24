@@ -92,7 +92,9 @@ def _normalize_col_aliases(df: pd.DataFrame) -> pd.DataFrame:
     for old, new in alias_map.items():
         if old in df.columns and new not in df.columns:
             rename[old] = new
-    return df.rename(columns=rename) if rename else df
+    df = df.rename(columns=rename) if rename else df
+    df['id'] = df['id'].astype(str)
+    return df
 
 
 def _context_item_to_text(item: Any) -> str:

@@ -1,18 +1,45 @@
 """
 ragas_filter.py
 
-RagasFilter: Raw data + feature/model -> filter predictions + evaluation
+RAGAS-feature-based inference module for contextual faithfulness filtering.
 
-------------------------
-Required:
-    - id
-    - question
-    - answer
-    - context
+Task:
+    Given precomputed RAGAS features for question, context, answer:
+    predict whether the answer is grounded in / supported by the context.
 
-Optional:
-    - label
-    - gold_ans / gold_answer / reference / reference_answer
+Output:
+    - filter_label: 1 accepted, 0 rejected
+    - filter_confidence: model confidence/probability if available
+
+Default behavior:
+    - Load trained model from joblib
+    - Select saved feature columns
+    - Predict accepted/rejected labels
+    - Evaluate with shared FilterEvaluator
+
+Expected raw data schema:
+    Required:
+        - id
+        - question
+        - answer
+        - context
+
+    Optional:
+        - label
+        - gold_ans / gold_answer / reference / reference_answer
+
+Expected feature schema:
+    Required:
+        - id
+        - RAGAS feature columns, e.g.
+            - faithfulness
+            - answer_relevancy
+            - context_precision
+            - context_recall
+
+    Optional:
+        - label
+        - raw metadata columns
 
 Label convention:
     - 1 = accepted / faithful / grounded
@@ -34,30 +61,18 @@ import numpy as np
 import pandas as pd
 
 from sklearn.base import BaseEstimator, clone
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
 
 logger = logging.getLogger(__name__)
 
 from .helper import (
     DEFAULT_RAGAS_FEATURE_COLS,
-    GOLD_ANSWER_CANDIDATES,
     _ensure_path,
     _normalize_col_aliases,
-    _get_gold_col,
-    _safe_json_dump,
     parse_context,
 )
 
 from .ragas_feature_extractor import RagasFeatureExtractor
-
+from ..evaluation.filter_evaluator import FilterEvaluator
 
 
 class RagasFilter:
@@ -203,139 +218,31 @@ class RagasFilter:
             merged.to_csv(filter_path, index=False, encoding="utf-8-sig")
         return merged
 
-    def evaluate_classification(
-        self,
-        df: Optional[pd.DataFrame] = None,
-        label_col: Optional[str] = None,
-        save_path: Optional[Union[str, Path]] = None,
-    ) -> Dict[str, Any]:
-        df = df if df is not None else self.output_df
-        if df is None:
-            raise ValueError("No prediction output found. Run predict() first.")
-        label_col = label_col or self.label_col
-        if label_col not in df.columns:
-            raise ValueError(f"Cannot evaluate classification: missing label column `{label_col}`.")
-
-        y_true = df[label_col].astype(int)
-        y_pred = df["filter_label"].astype(int)
-        metrics: Dict[str, Any] = {
-            "accuracy": accuracy_score(y_true, y_pred),
-            "precision": precision_score(y_true, y_pred, zero_division=0),
-            "recall": recall_score(y_true, y_pred, zero_division=0),
-            "f1": f1_score(y_true, y_pred, zero_division=0),
-            "confusion_matrix": confusion_matrix(y_true, y_pred).tolist(),
-            "classification_report": classification_report(
-                y_true, y_pred, output_dict=True, zero_division=0
-            ),
-        }
-        if "filter_confidence" in df.columns and y_true.nunique() == 2:
-            try:
-                metrics["roc_auc"] = roc_auc_score(y_true, df["filter_confidence"])
-            except Exception:
-                metrics["roc_auc"] = np.nan
-        if save_path is not None:
-            _safe_json_dump(metrics, save_path)
-        return metrics
-
-    def evaluate_answer_quality(
-        self,
-        df: Optional[pd.DataFrame] = None,
-        evaluator: Optional[Any] = None,
-        gold_col: Optional[str] = None,
-        answer_col: Optional[str] = None,
-        context_col: Optional[str] = None,
-        metrics: Optional[List[str]] = None,
-        save_path: Optional[Union[str, Path]] = None,
-    ) -> pd.DataFrame:
-        df = df if df is not None else self.output_df
-        if df is None:
-            raise ValueError("No prediction output found. Run predict() first.")
-
-        answer_col = answer_col or self.answer_col
-        context_col = context_col or self.context_col
-        gold_col = gold_col or self.gold_col or _get_gold_col(df)
-        if gold_col is None or gold_col not in df.columns:
-            raise ValueError(f"Cannot evaluate answer quality: missing gold answer column. Tried {GOLD_ANSWER_CANDIDATES}")
-        if answer_col not in df.columns:
-            raise ValueError(f"Missing answer column: {answer_col}")
-
-        accepted_df = df[df["filter_label"].astype(int) == 1].copy()
-
-        if evaluator is None:
-            try:
-                from src.evaluation.evaluator import TraditionalEvaluator
-                evaluator = TraditionalEvaluator(metrics=metrics or [
-                    "str_em", "rouge", "mauve", "citation_precision", "citation_recall"
-                ])
-            except Exception as exc:
-                raise ImportError("Could not import TraditionalEvaluator. Pass evaluator manually.") from exc
-
-        if hasattr(evaluator, "compare_filtered_quality"):
-            comparison = evaluator.compare_filtered_quality(
-                df=df,
-                accepted_df=accepted_df,
-                prediction_col=answer_col,
-                reference_col=gold_col,
-                context_col=context_col,
-            )
-        else:
-            full_scores = _evaluate_with_traditional_evaluator(evaluator, df, answer_col, gold_col, context_col)
-            accepted_scores = _evaluate_with_traditional_evaluator(evaluator, accepted_df, answer_col, gold_col, context_col)
-            rows = []
-            for metric in sorted(set(full_scores) | set(accepted_scores)):
-                before = full_scores.get(metric, np.nan)
-                after = accepted_scores.get(metric, np.nan)
-                rows.append({
-                    "metric": metric,
-                    "unfiltered": before,
-                    "accepted": after,
-                    "delta": after - before if pd.notna(before) and pd.notna(after) else np.nan,
-                })
-            comparison = pd.DataFrame(rows)
-
-        coverage = pd.DataFrame([
-            {"metric": "num_samples", "unfiltered": len(df), "accepted": len(accepted_df), "delta": len(accepted_df) - len(df)},
-            {"metric": "acceptance_rate", "unfiltered": 1.0, "accepted": len(accepted_df) / max(len(df), 1), "delta": len(accepted_df) / max(len(df), 1) - 1.0},
-        ])
-        comparison = pd.concat([coverage, comparison], ignore_index=True)
-
-        if save_path is not None:
-            save_path = _ensure_path(save_path)
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            comparison.to_csv(save_path, index=False, encoding="utf-8-sig")
-        return comparison
-
     def evaluate(
         self,
         df: Optional[pd.DataFrame] = None,
         mode: str = "both",
         evaluator: Optional[Any] = None,
-        data_name: str = "data",    
+        output_prefix: str = "llm_judge",
     ) -> Dict[str, Any]:
         df = df if df is not None else self.output_df
+
         if df is None:
             raise ValueError("No prediction output found. Run predict() first.")
-        result: Dict[str, Any] = {}
 
-        if mode in ["classification", "both"]:
-            if self.label_col in df.columns:
-                result["classification"] = self.evaluate_classification(
-                    df=df,
-                    save_path=self.output_dir / f"{data_name}_classification.json",
-                )
-            else:
-                logger.warning("Skipping classification evaluation: no label column found.")
+        filter_evaluator = FilterEvaluator(
+            label_col=self.label_col,
+            answer_col=self.answer_col,
+            context_col=self.context_col,
+            output_dir=self.output_dir,
+        )
 
-        if mode in ["quality", "both"]:
-            if _get_gold_col(df) is not None or self.gold_col is not None:
-                result["quality"] = self.evaluate_answer_quality(
-                    df=df,
-                    evaluator=evaluator,
-                    save_path=self.output_dir / f"{data_name}_quality.csv",
-                )
-            else:
-                logger.warning("Skipping answer quality evaluation: no gold answer column found.")
-        return result
+        return filter_evaluator.evaluate(
+            df=df,
+            mode=mode,
+            evaluator=evaluator,
+            output_prefix=output_prefix,
+        )
 
     def run(
         self,
@@ -359,8 +266,16 @@ class RagasFilter:
             batch_size=batch_size,
             show_progress=show_progress,
         )
-        evaluation = self.evaluate(df=output_df, mode=eval_mode, evaluator=evaluator, data_name=data_name)
-        return {"output_df": output_df, "evaluation": evaluation}
+        eval_result = self.evaluate(
+            df=output_df,
+            mode=eval_mode,
+            evaluator=evaluator,
+        )
+
+        return {
+            "output_df": output_df,
+            "evaluation": eval_result,
+        }
 
 
 def _evaluate_with_traditional_evaluator(

@@ -3,9 +3,19 @@ ragas_feature_extractor.py
 
 Dataset-agnostic RAGAS feature extraction utilities.
 
-RagasFeatureExtractor: Raw data CSV/DataFrame -> RAGAS feature DataFrame
+Task:
+    Given question, context, answer:
+    compute RAGAS metrics used as features for contextual faithfulness filtering.
 
-------------------------
+Default RAGAS features:
+    - faithfulness
+    - answer_relevancy
+    - context_precision
+    - context_recall
+    - context_relevancy
+    - answer_correctness
+    - answer_similarity
+    
 Required:
     - id
     - question
@@ -16,9 +26,20 @@ Optional:
     - label
     - gold_ans / gold_answer / reference / reference_answer
 
+Context handling:
+    The context column should already be processed, but this module supports:
+        - list[str]
+        - stringified list[str]
+        - JSON list
+        - plain string
+
 Label convention:
     - 1 = accepted / faithful / grounded
     - 0 = rejected / hallucinated / unsupported
+
+Notes:
+    This module only creates features.
+    Use RagasFilterTrainer for training and RagasFilter for inference/evaluation.
 """
 
 from __future__ import annotations

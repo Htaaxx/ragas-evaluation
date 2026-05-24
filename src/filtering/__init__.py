@@ -27,6 +27,7 @@ from .helper import (
 from .ragas_feature_extractor import RagasFeatureExtractor, build_ragas_features
 from .ragas_filter_trainer import RagasFilterTrainer, train_ragas_filter
 from .ragas_filter import RagasFilter, run_ragas_filter
+from .llm_judge_filter import LLMJudgeFilter
     
 __all__ = [
     RAGAS,
@@ -45,4 +46,5 @@ __all__ = [
     build_ragas_features,
     train_ragas_filter,
     run_ragas_filter,
+    LLMJudgeFilter,
 ]

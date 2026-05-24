@@ -1,11 +1,47 @@
 """
 ragas_filter_trainer.py
 
-Train sklearn classifiers from RAGAS feature files.
+Training module for RAGAS-feature-based contextual faithfulness filters.
 
-Expected feature data:
-- label column
-- RAGAS numeric feature columns, e.g. faithfulness, answer_relevancy, context_relevancy.
+Task:
+    Train classical ML classifiers on RAGAS feature columns to predict
+    whether an answer is grounded in / supported by the context.
+
+Input:
+    - feature_df / feature_path produced by RagasFeatureExtractor
+    - label column
+
+Output:
+    - trained best model saved as .joblib
+    - training_results.csv
+    - test_predictions.csv
+    - training_metadata.json
+
+Default models:
+    - Logistic Regression
+    - Random Forest
+    - Gradient Boosting
+    - HistGradientBoosting
+    - Extra Trees
+    - XGBoost if installed
+
+Label convention:
+    - 1 = accepted / faithful / grounded
+    - 0 = rejected / hallucinated / unsupported
+
+Expected feature schema:
+    Required:
+        - id
+        - label
+        - RAGAS feature columns, e.g.
+            - faithfulness
+            - answer_relevancy
+            - context_precision
+            - context_recall
+
+Notes:
+    This module does NOT call RAGAS.
+    Use RagasFeatureExtractor first to create feature_df.
 """
 
 from __future__ import annotations

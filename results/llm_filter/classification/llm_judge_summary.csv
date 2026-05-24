@@ -1,0 +1,4 @@
+﻿dataset,num_samples,accepted,acceptance_rate,accuracy,precision,recall,f1,roc_auc,prediction_path
+msmacro,1000,418,0.418,0.916,0.9976076555023924,0.834,0.9084967320261438,0.752654,..\results\llm_filter\classification\msmacro\msmacro_llm_judge_predictions.csv
+wikieval,100,53,0.53,0.93,0.9056603773584906,0.96,0.9320388349514563,0.8779999999999999,..\results\llm_filter\classification\wikieval\wikieval_llm_judge_predictions.csv
+asqa_test,1742,674,0.3869115958668197,0.8490241102181401,0.9510385756676558,0.7359357060849598,0.8297734627831715,0.6680933405919269,..\results\llm_filter\classification\asqa_test\asqa_test_llm_judge_predictions.csv
