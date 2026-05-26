@@ -223,6 +223,17 @@ class VerifierSystem:
             padding=True,
         )
 
+        steps_per_epoch = max(
+            1,
+            len(train_dataset)
+            // (
+                train_cfg["batch_size"]
+                * train_cfg["gradient_accumulation_steps"]
+            ),
+        )
+        total_steps = steps_per_epoch * train_cfg["num_epochs"]
+        warmup_steps = int(total_steps * train_cfg["warmup_ratio"])
+
         args = Seq2SeqTrainingArguments(
             output_dir=str(save_dir),
             num_train_epochs=train_cfg["num_epochs"],
@@ -230,7 +241,7 @@ class VerifierSystem:
             per_device_eval_batch_size=train_cfg["batch_size"],
             gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
             learning_rate=train_cfg["learning_rate"],
-            warmup_ratio=train_cfg["warmup_ratio"],
+            warmup_steps=warmup_steps,
             weight_decay=train_cfg["weight_decay"],
             max_grad_norm=train_cfg["max_grad_norm"],
             predict_with_generate=True,
@@ -252,7 +263,7 @@ class VerifierSystem:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             callbacks=[
                 EarlyStoppingCallback(
                     early_stopping_patience=train_cfg["early_stopping_patience"],
