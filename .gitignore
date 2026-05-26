@@ -52,6 +52,12 @@ vectorstore/
 *.faiss
 *.pkl
 
+# Regeneratable experiment outputs (keep pinned inputs like asqa_normal_rag_predictions.csv)
+results/*.json
+results/*_filtered.csv
+results/rag_predictions_filtered.csv
+results/metric_separation_sanity_check.json
+
 # Data (optional - uncomment if you don't want to track data)
 # data/
 

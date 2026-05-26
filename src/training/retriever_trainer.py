@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..config import RAGConfig
-from ..data.loader import RetrieverExample
+from ..data.base_loader import RetrieverExample
 
 logger = logging.getLogger(__name__)
 

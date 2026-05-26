@@ -1,0 +1,47 @@
+# Self-RAG-style answer verifier config.
+# Generative LM that produces reflection tokens + ACCEPT/REJECT.
+# No retriever, no KB. Gold context fed directly.
+
+model:
+  name: "google/flan-t5-base"
+  max_input_length: 512
+  max_target_length: 64
+  model_save_dir: "models/rag_verifier"
+
+data:
+  labeled_csv: "data/asqa/labeled_asqa.csv"
+  test_ratio: 0.2
+  val_ratio: 0.2
+  seed: 42
+  context_max_chars: 800
+
+training:
+  batch_size: 4
+  num_epochs: 5
+  learning_rate: 5.0e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 4
+  early_stopping_patience: 3
+  save_total_limit: 2
+  seed: 42
+  fp16: false
+
+evaluation:
+  results_dir: "results/rag_verifier"
+
+prompt_template: |
+  Given the following:
+  Question: {question}
+  Context: {context}
+  Answer: {answer}
+
+  Evaluate this answer on three dimensions, then give a final decision.
+
+reflection_tokens:
+  accept_target: "[IsRel] relevant [IsSup] fully_supported [IsUse] 5 [Decision] ACCEPT"
+  reject_target: "[IsRel] relevant [IsSup] no_support [IsUse] 1 [Decision] REJECT"
+  decision_keyword: "[Decision]"
+  accept_keyword: "ACCEPT"
+  reject_keyword: "REJECT"

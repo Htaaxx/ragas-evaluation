@@ -31,7 +31,7 @@ except ImportError:
     from torch.optim import AdamW
 
 from ..config import RAGConfig
-from ..data.loader import TrainExample
+from ..data.base_loader import TrainExample
 
 logger = logging.getLogger(__name__)
 

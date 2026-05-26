@@ -19,7 +19,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from .config import RAGConfig
-from .data.loader import ASQALoader
+from .data.asqa_loader import ASQALoader
 from .evaluation.retriever_evaluator import RetrieverEvaluator
 from .retrieval.indexer import DocumentIndexer
 from .retrieval.qa_pipeline import QAPipeline

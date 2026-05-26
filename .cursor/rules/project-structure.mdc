@@ -9,13 +9,14 @@ Organize code by **pipeline stage**, matching the actual codebase.
 
 ```
 /src
-  /data              # Dataset loaders (ASQALoader, HotpotQALoader)
+  /data              # Dataset loaders (ASQALoader)
   /retrieval         # QAPipeline, DocumentIndexer (FAISS)
   /training          # Retriever and generator training
   /filtering         # Answer quality filtering (CORE THESIS FOCUS)
   /evaluation        # RAGAS evaluator, retriever evaluator
   /configs           # YAML configuration files
   /utils             # Model cache, shared helpers
+/rag-interference    # Self-RAG-style generative verifier experiment (Flan-T5)
 /data
   /asqa              # ASQA dataset files (train.csv, dev.csv, labeled_asqa.csv)
 /models              # Saved model checkpoints (e.g., models/answer_filter/)
@@ -38,3 +39,5 @@ retrieve → generate → filter (answer quality) → accept/reject
 - Filtering logic lives ONLY in `/src/filtering/`
 - Reusable logic goes in `/src/`, never in notebooks
 - Experimental code and visualizations go in `/notebooks/`
+- Self-RAG generative verifier experiment lives in `/rag-interference/` and may
+  import shared utilities from `/src/` (e.g. `data_split`, `_extract_top1_context`)
