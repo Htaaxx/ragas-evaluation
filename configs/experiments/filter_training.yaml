@@ -1,0 +1,12 @@
+# Filter training experiment settings (paths + split; hyperparams in deberta_filter.yaml)
+
+data:
+  labeled_csv: data/asqa/labeled_asqa.csv
+  test_ratio: 0.2
+  val_ratio: 0.2
+  seed: 42
+
+filtering_config: configs/filtering/deberta_filter.yaml
+model_output: models/answer_filter
+results_dir: results
+min_recall_for_threshold: 0.70

@@ -1,0 +1,14 @@
+# Ablation experiment settings
+
+data:
+  labeled_csv: data/asqa/labeled_asqa.csv
+  test_ratio: 0.2
+  val_ratio: 0.2
+  seed: 42
+
+filtering_config: configs/filtering/deberta_filter.yaml
+models_dir: models/ablations
+results_dir: results/ablations
+data_fractions: [0.25, 0.50, 0.75, 1.0]
+max_lengths: [256, 384, 512]
+min_recall_for_threshold: 0.70

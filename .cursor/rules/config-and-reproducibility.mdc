@@ -13,30 +13,12 @@ alwaysApply: false
 - Store configs in `/src/configs/`
 
 ```yaml
-# src/configs/filtering.yaml
-answer_filter:
-  model_name: "gemini-2.5-flash"
-  threshold: 6.0
-  max_concurrent: 10
-
-reward_filter:
-  correctness_threshold: 0.50
-  max_retries: 3
-  dataset_type: "universal"
-
+# configs/filtering/deberta_filter.yaml
 learned_filter:
   model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
   model_path: "models/answer_filter"
-  threshold: 0.5            # default only; final threshold tuned on val
-  max_length: 384
-  batch_size: 8
-  num_epochs: 10
-  learning_rate: 2.0e-5
-  classifier_lr: 1.0e-4     # used only if differential LR is enabled
-  warmup_ratio: 0.1
-  weight_decay: 0.01
-  max_grad_norm: 1.0
-  early_stopping_patience: 3
+  threshold: 0.5
+  max_length: 512
   fp16: false               # NEVER set to true (DeBERTa-v3 instability)
 ```
 
@@ -45,9 +27,9 @@ learned_filter:
 threshold = 0.5  # hardcoded
 
 # GOOD
-from src.configs import load_config
-config = load_config("filtering")
-threshold = config["learned_filter"]["threshold"]
+from rag_filtering.config.loader import load_config_section, FILTERING_CONFIG
+learned = load_config_section(FILTERING_CONFIG, "learned_filter")
+threshold = learned["threshold"]
 ```
 
 ## Reproducibility

@@ -8,20 +8,26 @@ alwaysApply: true
 Organize code by **pipeline stage**, matching the actual codebase.
 
 ```
+/configs
+  /filtering           # deberta_filter.yaml — model hyperparams
+  /experiments         # filter_training.yaml, ablations.yaml, asqa_baseline.yaml
+  /rag                 # optional RAG pipeline YAML
 /src
-  /data              # Dataset loaders (ASQALoader, HotpotQALoader)
-  /retrieval         # QAPipeline, DocumentIndexer (FAISS)
-  /training          # Retriever and generator training
-  /filtering         # Answer quality filtering (CORE THESIS FOCUS)
-  /evaluation        # RAGAS evaluator, retriever evaluator
-  /configs           # YAML configuration files
-  /utils             # Model cache, shared helpers
+  /rag_filtering       # Reusable library (thesis code lives here)
+    /config            # YAML loader (repo-root configs/)
+    /data              # ASQALoader
+    /rag               # RAGSystem, retrieval, training (baseline support)
+    /filtering         # Answer quality filtering (CORE THESIS FOCUS)
+    /evaluation        # RAGAS + retriever evaluators
+    /utils             # Model cache
 /data
-  /asqa              # ASQA dataset files (train.csv, dev.csv, labeled_asqa.csv)
-/models              # Saved model checkpoints (e.g., models/answer_filter/)
-/results             # Experiment outputs (predictions CSV, metrics JSON)
-/notebooks           # Exploration, training, and analysis notebooks
-/tests               # Unit tests mirroring /src structure
+  /asqa                # labeled_asqa.csv (primary dataset)
+/models                # Saved checkpoints
+/results               # Experiment outputs
+/scripts               # Headless CLI runners
+/notebooks             # Thin experiment/reporting notebooks (01–05)
+/experiments           # Side experiments (e.g. self_rag_verifier)
+/tests                 # Unit tests
 ```
 
 ## Pipeline Flow
@@ -34,7 +40,7 @@ retrieve → generate → filter (answer quality) → accept/reject
   the filter verifies whether the generated answer is faithful to the
   retrieved context. Interface: `(context, answer)` (NLI-style:
   premise = context, hypothesis = answer).
-- Each stage is independent, testable, and replaceable
-- Filtering logic lives ONLY in `/src/filtering/`
-- Reusable logic goes in `/src/`, never in notebooks
-- Experimental code and visualizations go in `/notebooks/`
+- Core logic lives in `/src/rag_filtering/`, never in notebooks.
+- Notebooks import `rag_filtering` and display results only.
+- Configs live in top-level `/configs/`, loaded via `rag_filtering.config.loader`.
+- Scripts in `/scripts/` are reproducible headless entry points.

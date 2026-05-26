@@ -1,0 +1,19 @@
+# ASQA RAG baseline experiment paths
+
+data:
+  train_csv: data/asqa/train.csv
+  dev_csv: data/asqa/dev.csv
+
+rag:
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  generator_model: google/flan-t5-base
+  models_dir: models
+  output_dir: rag_output
+  top_k: 5
+
+results:
+  predictions_csv: results/asqa_normal_rag_predictions.csv
+  filtered_csv: results/rag_predictions_filtered.csv
+
+filtering_config: configs/filtering/deberta_filter.yaml
+model_path: models/answer_filter
