@@ -363,4 +363,5 @@ def plot_evaluation_results(evaluation, data_name):
     if "quality" in evaluation:
         quality_df = evaluation["quality"]
         print(f"\nAnswer Quality Scores for {data_name}:")
-        display(quality_df.describe().T)
+        # display(quality_df[["metric", "unfiltered", "accepted", "delta"]].round(4))
+        display(quality_df.round(4))

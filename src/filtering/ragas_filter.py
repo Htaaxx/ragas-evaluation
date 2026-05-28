@@ -176,6 +176,12 @@ class RagasFilter:
             batch_size=batch_size,
             show_progress=show_progress,
         )
+        if data is not None:
+            raw_df = self.feature_extractor.prepare_data(data) if self.feature_extractor is not None else _normalize_col_aliases(pd.DataFrame())
+            raw_cols = [c for c in raw_df.columns if c not in df.columns]
+            # concat raw metadata base one id_col if exists, otherwise just concat
+            if self.id_col in df.columns and self.id_col in raw_df.columns:
+                df = df.merge(raw_df[raw_cols + [self.id_col]], on=self.id_col, how="left")
 
         if self.feature_cols is None:
             self.feature_cols = [c for c in DEFAULT_RAGAS_FEATURE_COLS if c in df.columns]
@@ -206,6 +212,7 @@ class RagasFilter:
             "filter_label": pred.astype(int),
             "filter_confidence": prob.astype(float),
         })
+
         merged = pd.concat(
             [df.reset_index(drop=True), pred_df.drop(columns=[self.id_col], errors="ignore").reset_index(drop=True)],
             axis=1,
@@ -270,6 +277,7 @@ class RagasFilter:
             df=output_df,
             mode=eval_mode,
             evaluator=evaluator,
+            output_prefix=data_name,
         )
 
         return {

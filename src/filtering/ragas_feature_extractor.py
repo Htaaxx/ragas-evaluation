@@ -33,9 +33,6 @@ Context handling:
         - JSON list
         - plain string
 
-Label convention:
-    - 1 = accepted / faithful / grounded
-    - 0 = rejected / hallucinated / unsupported
 
 Notes:
     This module only creates features.
@@ -179,7 +176,10 @@ class RagasFeatureExtractor:
             out = pd.concat([df[raw_cols].reset_index(drop=True), feature_df], axis=1)
             out["parsed_context"] = df["_parsed_context"].apply(lambda x: json.dumps(x, ensure_ascii=False))
         else:
-            out = pd.concat([df[[self.id_col, 'label']].reset_index(drop=True), feature_df], axis=1)
+            out = pd.concat([df[[self.id_col]].reset_index(drop=True), feature_df], axis=1)
+            # if raw df have label column, keep it for training filter model
+            if "label" in df.columns:
+                out["label"] = df["label"]
 
         if feature_path is not None:
             feature_path = _ensure_path(feature_path)
