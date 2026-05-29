@@ -644,8 +644,14 @@ def overfit_sanity_check(
     # which needs an aggressive LR to escape the trivial constant-output
     # local minimum (loss stuck at ln 2 ≈ 0.693). 5e-5 is the standard
     # overfit-test LR for DeBERTa-base.
+    #
+    # ROOT-CAUSE FIX (NaN explosion): under adam_epsilon=1.0 the optimizer is
+    # SGD-like, so the gate needs a higher LR than the 5e-5 we used while the
+    # default eps=1e-8 was silently diverging the model. Pull both the LR and
+    # the epsilon from config so the gate and full training stay consistent.
+    adam_epsilon = float(cfg.get("adam_epsilon", 1.0))
     if learning_rate is None:
-        learning_rate = 5e-5
+        learning_rate = float(cfg.get("overfit_learning_rate", 2e-4))
     if batch_size is None:
         batch_size = cfg.get("batch_size", 4)
 
@@ -682,12 +688,12 @@ def overfit_sanity_check(
 
     logger.info(
         "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs "
-        "at lr=%.0e, batch_size=%d, max_length=%d, using HF Trainer "
-        "(same stack as train_classifier)",
+        "at lr=%.0e, adam_eps=%.0e, batch_size=%d, max_length=%d, using HF "
+        "Trainer (same stack as train_classifier)",
         len(mini_df),
         sum(1 for lbl in labels if lbl == 1),
         sum(1 for lbl in labels if lbl == 0),
-        epochs, learning_rate, batch_size, max_length,
+        epochs, learning_rate, adam_epsilon, batch_size, max_length,
     )
 
     # --- Model + tokenizer + dataset (same _QADataset as train_classifier) ---
@@ -721,6 +727,9 @@ def overfit_sanity_check(
         warmup_ratio=0.1,
         weight_decay=cfg.get("weight_decay", 0.01),
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
+        # ROOT-CAUSE FIX: large AdamW eps stops the +/-lr update explosion that
+        # NaN'd DeBERTa-v3 on the PyTorch 2.9+/Transformers 5.0 stack.
+        adam_epsilon=adam_epsilon,
         # NaN-DIAG: log EVERY step and do NOT hide nan/inf losses, so the raw
         # loss/grad_norm trajectory is visible up to the exact divergence step.
         logging_steps=1,
@@ -838,6 +847,7 @@ def _build_differential_optimizer(
     weight_decay: float,
     num_training_steps: int,
     warmup_ratio: float,
+    adam_eps: float = 1.0,
 ):
     """Build AdamW with differential LRs + a linear warmup scheduler.
 
@@ -883,8 +893,10 @@ def _build_differential_optimizer(
          "weight_decay": 0.0},
     ]
 
-    # eps=1e-6 (not the 1e-8 default) for DeBERTa-v3 numerical stability.
-    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, eps=1e-6)
+    # adam_eps defaults to 1.0 (NOT the 1e-8 torch default): on PyTorch 2.9+/
+    # Transformers 5.0 the tiny default eps makes AdamW updates ~ +/-lr and
+    # diverges DeBERTa-v3 to NaN. A large eps makes updates SGD-like + stable.
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, eps=adam_eps)
 
     warmup_steps = int(warmup_ratio * num_training_steps)
     scheduler = get_linear_schedule_with_warmup(
@@ -893,9 +905,9 @@ def _build_differential_optimizer(
         num_training_steps=num_training_steps,
     )
     logger.info(
-        "Differential LR active: backbone=%.0e head=%.0e "
+        "Differential LR active: backbone=%.0e head=%.0e adam_eps=%.0e "
         "(warmup_steps=%d / total_steps=%d)",
-        backbone_lr, head_lr, warmup_steps, num_training_steps,
+        backbone_lr, head_lr, adam_eps, warmup_steps, num_training_steps,
     )
     return optimizer, scheduler
 
@@ -948,6 +960,7 @@ def train_classifier(
     warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
+    adam_epsilon: float = float(cfg.get("adam_epsilon", 1.0))
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     early_stopping_patience: int = cfg.get("early_stopping_patience", 3)
     use_fp16: bool = cfg.get("fp16", False)
@@ -1096,6 +1109,7 @@ def train_classifier(
         weight_decay=weight_decay,
         num_training_steps=num_training_steps,
         warmup_ratio=warmup_ratio,
+        adam_eps=adam_epsilon,
     )
 
     if use_weighted_loss:

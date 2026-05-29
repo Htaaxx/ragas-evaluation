@@ -38,6 +38,16 @@ learned_filter:
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
+  # adam_epsilon: ROOT-CAUSE FIX for the NaN explosion on PyTorch 2.9+/
+  # Transformers 5.0. With clipped grads the per-param gradient is ~1e-4, so
+  # AdamW's denominator (sqrt(v_hat)+eps) with the default eps=1e-8 collapses
+  # to ~sqrt(v_hat), making every update ~ +/-lr and diverging DeBERTa-v3's
+  # disentangled attention (loss exploded 0.5 -> 259 -> NaN). A large eps makes
+  # the denominator eps-dominated (SGD-like, stable). eps=1e-6 is NOT enough.
+  adam_epsilon: 1.0
+  # overfit_learning_rate: the sanity gate runs SGD-like under adam_epsilon=1.0,
+  # so it needs a higher LR than full training to fit 32 samples in 50 epochs.
+  overfit_learning_rate: 2.0e-4
   label_smoothing: 0.0
   early_stopping_patience: 3
   fp16: false                # NEVER set to true (DeBERTa-v3 instability)
