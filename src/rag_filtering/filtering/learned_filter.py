@@ -645,11 +645,15 @@ def overfit_sanity_check(
     # local minimum (loss stuck at ln 2 ≈ 0.693). 5e-5 is the standard
     # overfit-test LR for DeBERTa-base.
     #
-    # ROOT-CAUSE FIX (NaN explosion): under adam_epsilon=1.0 the optimizer is
-    # SGD-like, so the gate needs a higher LR than the 5e-5 we used while the
-    # default eps=1e-8 was silently diverging the model. Pull both the LR and
-    # the epsilon from config so the gate and full training stay consistent.
-    adam_epsilon = float(cfg.get("adam_epsilon", 1.0))
+    # ROOT-CAUSE FIX (NaN explosion + underfit): the gate uses the SAME
+    # differential optimizer as train_classifier. The pretrained backbone gets
+    # a small LR + a LARGE eps (SGD-like, stable -> no NaN); the from-scratch
+    # 2-class head gets a higher LR + the STANDARD small eps (Adam-like, learns
+    # fast -> escapes the ln 2 plateau). A single shared eps cannot do both:
+    # eps=1e-8 NaN'd the backbone, eps=1.0 froze the head at F1~random.
+    backbone_eps = float(cfg.get("backbone_adam_epsilon", 1.0))
+    head_eps = float(cfg.get("head_adam_epsilon", 1e-8))
+    backbone_lr = float(cfg.get("learning_rate", 1e-5))
     if learning_rate is None:
         learning_rate = float(cfg.get("overfit_learning_rate", 2e-4))
     if batch_size is None:
@@ -687,13 +691,14 @@ def overfit_sanity_check(
     ids = mini_df["id"].tolist()
 
     logger.info(
-        "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs "
-        "at lr=%.0e, adam_eps=%.0e, batch_size=%d, max_length=%d, using HF "
-        "Trainer (same stack as train_classifier)",
+        "OVERFIT TEST: %d samples (%d pos, %d neg) for %d epochs at "
+        "head_lr=%.0e (eps=%.0e) / backbone_lr=%.0e (eps=%.0e), batch_size=%d, "
+        "max_length=%d, using HF Trainer (same stack as train_classifier)",
         len(mini_df),
         sum(1 for lbl in labels if lbl == 1),
         sum(1 for lbl in labels if lbl == 0),
-        epochs, learning_rate, adam_epsilon, batch_size, max_length,
+        epochs, learning_rate, head_eps, backbone_lr, backbone_eps,
+        batch_size, max_length,
     )
 
     # --- Model + tokenizer + dataset (same _QADataset as train_classifier) ---
@@ -718,18 +723,19 @@ def overfit_sanity_check(
     #  - gradient_accumulation_steps=1 (tiny dataset, no need to accumulate)
     tmp_out = Path("/tmp/overfit_check_ckpt")
     tmp_out.mkdir(parents=True, exist_ok=True)
+    weight_decay = cfg.get("weight_decay", 0.01)
+    warmup_ratio = cfg.get("warmup_ratio", 0.1)
     args = TrainingArguments(
         output_dir=str(tmp_out),
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
+        # learning_rate here is informational only — the explicit differential
+        # optimizer below (passed via optimizers=) overrides it.
         learning_rate=learning_rate,
-        warmup_ratio=0.1,
-        weight_decay=cfg.get("weight_decay", 0.01),
+        warmup_ratio=warmup_ratio,
+        weight_decay=weight_decay,
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
-        # ROOT-CAUSE FIX: large AdamW eps stops the +/-lr update explosion that
-        # NaN'd DeBERTa-v3 on the PyTorch 2.9+/Transformers 5.0 stack.
-        adam_epsilon=adam_epsilon,
         # NaN-DIAG: log EVERY step and do NOT hide nan/inf losses, so the raw
         # loss/grad_norm trajectory is visible up to the exact divergence step.
         logging_steps=1,
@@ -740,11 +746,27 @@ def overfit_sanity_check(
         seed=cfg.get("seed", 42),
     )
 
+    # ROOT-CAUSE FIX: per-group eps differential optimizer (same as full
+    # training). Backbone = large eps (stable), head = small eps (learns).
+    steps_per_epoch = math.ceil(len(overfit_dataset) / batch_size)
+    num_training_steps = steps_per_epoch * epochs
+    optimizer, scheduler = _build_differential_optimizer(
+        model,
+        backbone_lr=backbone_lr,
+        head_lr=learning_rate,
+        weight_decay=weight_decay,
+        num_training_steps=num_training_steps,
+        warmup_ratio=warmup_ratio,
+        backbone_eps=backbone_eps,
+        head_eps=head_eps,
+    )
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=overfit_dataset,
         data_collator=data_collator,
+        optimizers=(optimizer, scheduler),
         callbacks=[_NaNDiagnosticCallback()],
     )
 
@@ -847,9 +869,10 @@ def _build_differential_optimizer(
     weight_decay: float,
     num_training_steps: int,
     warmup_ratio: float,
-    adam_eps: float = 1.0,
+    backbone_eps: float = 1.0,
+    head_eps: float = 1e-8,
 ):
-    """Build AdamW with differential LRs + a linear warmup scheduler.
+    """Build AdamW with differential LRs + per-group eps + warmup scheduler.
 
     The MNLI 3-class head is dropped at load time and replaced by a
     randomly-initialized 2-class head. A pretrained backbone needs a small
@@ -882,21 +905,26 @@ def _build_differential_optimizer(
         suffix = "nodecay" if _no_decay(name) else "decay"
         groups[f"{prefix}_{suffix}"].append(param)
 
+    # PER-GROUP eps (the real fix). On PyTorch 2.9+/Transformers 5.0 a tiny eps
+    # makes AdamW updates ~ +/-lr; for the pretrained backbone that destabilizes
+    # DeBERTa-v3's disentangled attention -> loss explodes to NaN. So the
+    # backbone gets a LARGE eps (SGD-like, stable). But the same large eps on
+    # the from-scratch head makes its updates ~lr*grad (too small) -> the model
+    # never learns and the loss sits at ln 2. So the head keeps the STANDARD
+    # small eps (Adam-like, learns fast). This is the DataFog recipe:
+    # eps=1.0 backbone, eps=1e-8 head.
     optimizer_grouped_parameters = [
         {"params": groups["backbone_decay"], "lr": backbone_lr,
-         "weight_decay": weight_decay},
+         "weight_decay": weight_decay, "eps": backbone_eps},
         {"params": groups["backbone_nodecay"], "lr": backbone_lr,
-         "weight_decay": 0.0},
+         "weight_decay": 0.0, "eps": backbone_eps},
         {"params": groups["head_decay"], "lr": head_lr,
-         "weight_decay": weight_decay},
+         "weight_decay": weight_decay, "eps": head_eps},
         {"params": groups["head_nodecay"], "lr": head_lr,
-         "weight_decay": 0.0},
+         "weight_decay": 0.0, "eps": head_eps},
     ]
 
-    # adam_eps defaults to 1.0 (NOT the 1e-8 torch default): on PyTorch 2.9+/
-    # Transformers 5.0 the tiny default eps makes AdamW updates ~ +/-lr and
-    # diverges DeBERTa-v3 to NaN. A large eps makes updates SGD-like + stable.
-    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, eps=adam_eps)
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
 
     warmup_steps = int(warmup_ratio * num_training_steps)
     scheduler = get_linear_schedule_with_warmup(
@@ -905,9 +933,10 @@ def _build_differential_optimizer(
         num_training_steps=num_training_steps,
     )
     logger.info(
-        "Differential LR active: backbone=%.0e head=%.0e adam_eps=%.0e "
+        "Differential LR active: backbone=%.0e (eps=%.0e) head=%.0e (eps=%.0e) "
         "(warmup_steps=%d / total_steps=%d)",
-        backbone_lr, head_lr, adam_eps, warmup_steps, num_training_steps,
+        backbone_lr, backbone_eps, head_lr, head_eps,
+        warmup_steps, num_training_steps,
     )
     return optimizer, scheduler
 
@@ -960,7 +989,8 @@ def train_classifier(
     warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
-    adam_epsilon: float = float(cfg.get("adam_epsilon", 1.0))
+    backbone_eps: float = float(cfg.get("backbone_adam_epsilon", 1.0))
+    head_eps: float = float(cfg.get("head_adam_epsilon", 1e-8))
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     early_stopping_patience: int = cfg.get("early_stopping_patience", 3)
     use_fp16: bool = cfg.get("fp16", False)
@@ -1109,7 +1139,8 @@ def train_classifier(
         weight_decay=weight_decay,
         num_training_steps=num_training_steps,
         warmup_ratio=warmup_ratio,
-        adam_eps=adam_epsilon,
+        backbone_eps=backbone_eps,
+        head_eps=head_eps,
     )
 
     if use_weighted_loss:

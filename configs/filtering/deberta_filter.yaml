@@ -38,15 +38,19 @@ learned_filter:
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
-  # adam_epsilon: ROOT-CAUSE FIX for the NaN explosion on PyTorch 2.9+/
-  # Transformers 5.0. With clipped grads the per-param gradient is ~1e-4, so
-  # AdamW's denominator (sqrt(v_hat)+eps) with the default eps=1e-8 collapses
-  # to ~sqrt(v_hat), making every update ~ +/-lr and diverging DeBERTa-v3's
-  # disentangled attention (loss exploded 0.5 -> 259 -> NaN). A large eps makes
-  # the denominator eps-dominated (SGD-like, stable). eps=1e-6 is NOT enough.
-  adam_epsilon: 1.0
-  # overfit_learning_rate: the sanity gate runs SGD-like under adam_epsilon=1.0,
-  # so it needs a higher LR than full training to fit 32 samples in 50 epochs.
+  # Per-group AdamW epsilon: ROOT-CAUSE FIX for the NaN explosion on PyTorch
+  # 2.9+/Transformers 5.0. With clipped grads the per-param gradient is ~1e-4,
+  # so AdamW's denominator (sqrt(v_hat)+eps) with the default eps=1e-8 collapses
+  # to ~sqrt(v_hat), making every update ~ +/-lr. For the pretrained backbone
+  # that diverges DeBERTa-v3's disentangled attention (loss 0.5 -> 259 -> NaN),
+  # so the backbone needs a LARGE eps (denominator eps-dominated, SGD-like,
+  # stable). But the same large eps on the from-scratch head makes its updates
+  # ~lr*grad (too small) so the model never learns (loss stuck at ln 2, F1
+  # random) -> the head keeps the STANDARD small eps (Adam-like, learns fast).
+  backbone_adam_epsilon: 1.0
+  head_adam_epsilon: 1.0e-8
+  # overfit_learning_rate: head LR for the sanity gate (backbone uses
+  # learning_rate above). The gate fits 32 samples in 50 epochs.
   overfit_learning_rate: 2.0e-4
   label_smoothing: 0.0
   early_stopping_patience: 3
