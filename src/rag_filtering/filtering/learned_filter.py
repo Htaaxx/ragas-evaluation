@@ -655,7 +655,7 @@ def overfit_sanity_check(
     head_eps = float(cfg.get("head_adam_epsilon", 1e-3))
     backbone_lr = float(cfg.get("learning_rate", 1e-5))
     if learning_rate is None:
-        learning_rate = float(cfg.get("overfit_learning_rate", 2e-4))
+        learning_rate = float(cfg.get("overfit_learning_rate", 5e-4))
     if batch_size is None:
         batch_size = cfg.get("batch_size", 4)
 

@@ -49,8 +49,13 @@ learned_filter:
   backbone_adam_epsilon: 1.0
   head_adam_epsilon: 1.0e-3
   # overfit_learning_rate: head LR for the sanity gate (backbone uses
-  # learning_rate above). The gate fits 32 samples in 50 epochs.
-  overfit_learning_rate: 2.0e-4
+  # learning_rate above). The gate fits 32 samples in 50 epochs. At 2e-4 the
+  # gate reached F1=0.857 (stable, P=1.0, only 4 positives under-fit); 5e-4
+  # gives the head enough push to clear the last few. This is the GATE LR only
+  # (gate-isolated) — full-training head LR stays at classifier_lr=5e-5. The
+  # old "5e-4 forbidden" note applied under the eps=1e-8 NaN regime, which the
+  # per-group eps + non-fused AdamW fix has eliminated.
+  overfit_learning_rate: 5.0e-4
   label_smoothing: 0.0
   early_stopping_patience: 3
   fp16: false                # NEVER set to true (DeBERTa-v3 instability)
