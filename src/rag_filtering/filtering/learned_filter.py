@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -38,6 +39,7 @@ from transformers import (
     EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
+    get_linear_schedule_with_warmup,
 )
 
 from .data_models import FilterDecision
@@ -698,6 +700,79 @@ def overfit_sanity_check(
     }
 
 
+# ---------------------------------------------------------------------------
+# Differential learning-rate optimizer (root-cause fix)
+# ---------------------------------------------------------------------------
+
+def _build_differential_optimizer(
+    model,
+    backbone_lr: float,
+    head_lr: float,
+    weight_decay: float,
+    num_training_steps: int,
+    warmup_ratio: float,
+):
+    """Build AdamW with differential LRs + a linear warmup scheduler.
+
+    The MNLI 3-class head is dropped at load time and replaced by a
+    randomly-initialized 2-class head. A pretrained backbone needs a small
+    LR (``backbone_lr``) for stability, but the from-scratch head needs a
+    larger LR (``head_lr``) to escape the trivial constant-output minimum
+    (loss stuck at ln 2 ≈ 0.693). A single shared LR of 1e-5 collapsed the
+    model to all-reject; separating the two LRs is the fix.
+
+    LayerNorm weights and biases are excluded from weight decay (standard
+    practice, also avoids penalizing the fresh head's bias). A matching
+    ``get_linear_schedule_with_warmup`` scheduler is always returned with
+    the optimizer — never pass an optimizer without its scheduler.
+    """
+    def _is_head(param_name: str) -> bool:
+        return param_name.startswith("classifier")
+
+    def _no_decay(param_name: str) -> bool:
+        return "bias" in param_name or "LayerNorm" in param_name
+
+    groups = {
+        "backbone_decay": [],
+        "backbone_nodecay": [],
+        "head_decay": [],
+        "head_nodecay": [],
+    }
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        prefix = "head" if _is_head(name) else "backbone"
+        suffix = "nodecay" if _no_decay(name) else "decay"
+        groups[f"{prefix}_{suffix}"].append(param)
+
+    optimizer_grouped_parameters = [
+        {"params": groups["backbone_decay"], "lr": backbone_lr,
+         "weight_decay": weight_decay},
+        {"params": groups["backbone_nodecay"], "lr": backbone_lr,
+         "weight_decay": 0.0},
+        {"params": groups["head_decay"], "lr": head_lr,
+         "weight_decay": weight_decay},
+        {"params": groups["head_nodecay"], "lr": head_lr,
+         "weight_decay": 0.0},
+    ]
+
+    # eps=1e-6 (not the 1e-8 default) for DeBERTa-v3 numerical stability.
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, eps=1e-6)
+
+    warmup_steps = int(warmup_ratio * num_training_steps)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=num_training_steps,
+    )
+    logger.info(
+        "Differential LR active: backbone=%.0e head=%.0e "
+        "(warmup_steps=%d / total_steps=%d)",
+        backbone_lr, head_lr, warmup_steps, num_training_steps,
+    )
+    return optimizer, scheduler
+
+
 def train_classifier(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -742,6 +817,7 @@ def train_classifier(
     batch_size: int = cfg.get("batch_size", 16)
     num_epochs: int = cfg.get("num_epochs", 10)
     learning_rate: float = cfg.get("learning_rate", 2e-5)
+    classifier_lr: float = cfg.get("classifier_lr", learning_rate)
     warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
@@ -873,6 +949,23 @@ def train_classifier(
         report_to="none",
     )
 
+    # --- Differential-LR optimizer + scheduler (root-cause fix) ---
+    # A single shared LR (1e-5) left the randomly-initialized 2-class head
+    # undertrained and collapsed the model to all-reject. Give the backbone
+    # the small LR and the fresh head a larger one, with a matching warmup
+    # scheduler. Steps must match the TrainingArguments grad-accum setting.
+    grad_accum = max(1, 16 // batch_size)
+    steps_per_epoch = math.ceil(len(train_dataset) / (batch_size * grad_accum))
+    num_training_steps = steps_per_epoch * num_epochs
+    optimizer, scheduler = _build_differential_optimizer(
+        model,
+        backbone_lr=learning_rate,
+        head_lr=classifier_lr,
+        weight_decay=weight_decay,
+        num_training_steps=num_training_steps,
+        warmup_ratio=warmup_ratio,
+    )
+
     if use_weighted_loss:
         class_weights = torch.tensor(
             [loss_weight_neg, loss_weight_pos], dtype=torch.float32,
@@ -890,6 +983,7 @@ def train_classifier(
             data_collator=data_collator,
             compute_metrics=_compute_metrics,
             class_weights=class_weights,
+            optimizers=(optimizer, scheduler),
             callbacks=[
                 EarlyStoppingCallback(
                     early_stopping_patience=early_stopping_patience,
@@ -904,6 +998,7 @@ def train_classifier(
             eval_dataset=val_dataset,
             data_collator=data_collator,
             compute_metrics=_compute_metrics,
+            optimizers=(optimizer, scheduler),
             callbacks=[
                 EarlyStoppingCallback(
                     early_stopping_patience=early_stopping_patience,

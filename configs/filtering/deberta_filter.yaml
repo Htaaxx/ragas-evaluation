@@ -29,8 +29,12 @@ learned_filter:
   num_epochs: 10
   # learning_rate lowered 2e-5 -> 1e-5: DeBERTa-v3 is numerically delicate;
   # the previous run went NaN at epoch 3 with 2e-5.
-  learning_rate: 1.0e-5
-  classifier_lr: 1.0e-4      # currently unused (vanilla Trainer uses single LR)
+  learning_rate: 1.0e-5      # backbone LR (pretrained DeBERTa-v3, kept small)
+  # classifier_lr: differential LR for the randomly-initialized 2-class head.
+  # A single shared 1e-5 left this fresh head undertrained -> loss stuck at
+  # ln 2 (~0.693) and all-reject collapse. Capped at 5e-5 per the diagnostic
+  # discipline rule; wired in train_classifier via _build_differential_optimizer.
+  classifier_lr: 5.0e-5
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
