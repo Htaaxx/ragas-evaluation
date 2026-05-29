@@ -38,6 +38,7 @@ from transformers import (
     DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
     get_linear_schedule_with_warmup,
 )
@@ -485,6 +486,107 @@ class _WeightedTrainer(Trainer):
 
 
 # ---------------------------------------------------------------------------
+# NaN diagnostics — pinpoint where/when training diverges
+# ---------------------------------------------------------------------------
+
+class _NaNDiagnosticCallback(TrainerCallback):
+    """Logs per-step health and flags the FIRST non-finite weight/grad.
+
+    Used to debug the overfit NaN explosion: it reports, at the exact step
+    things break, whether the GRADIENTS or the WEIGHTS went non-finite first
+    (gradients first => exploding loss / bad input; weights first with finite
+    grads => optimizer update instability, e.g. AdamW eps too small once the
+    gradient vanishes on an overfit set).
+    """
+
+    def __init__(self, verbose_until: int = 60, every: int = 20) -> None:
+        # Log grad-norm every step up to ``verbose_until`` (catch early
+        # divergence), then only every ``every`` steps to avoid flooding
+        # multi-thousand-step full-training runs. Non-finite events are
+        # ALWAYS logged regardless of throttling.
+        self._verbose_until = verbose_until
+        self._every = every
+        self._weight_reported = False
+        self._grad_reported = False
+
+    def _scan(self, model, kind: str):
+        """Return (name, stat) of the first non-finite tensor of ``kind``."""
+        for name, p in model.named_parameters():
+            tensor = p.grad if kind == "grad" else p.data
+            if tensor is None:
+                continue
+            if not torch.isfinite(tensor).all():
+                finite = tensor[torch.isfinite(tensor)]
+                amax = float(finite.abs().max()) if finite.numel() else float("nan")
+                return name, amax
+        return None, None
+
+    @staticmethod
+    def _total_grad_norm(model) -> float:
+        total = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                g = p.grad.detach()
+                if torch.isfinite(g).all():
+                    total += float(g.norm(2)) ** 2
+                else:
+                    return float("inf")
+        return total ** 0.5
+
+    def on_pre_optimizer_step(self, args, state, control, **kwargs):
+        """Grads are populated here (BEFORE clipping + the optimizer step)."""
+        model = kwargs.get("model")
+        if model is None:
+            return
+        gnorm = self._total_grad_norm(model)
+        # Per-step grad-norm trace: rising -> divergence; ~0 -> vanished.
+        step = state.global_step
+        non_finite_norm = not math.isfinite(gnorm)
+        if step <= self._verbose_until or step % self._every == 0 or non_finite_norm:
+            logger.info(
+                "NaN-DIAG step %d: raw_grad_norm(pre-clip)=%.4e",
+                step, gnorm,
+            )
+        gname, gmax = self._scan(model, "grad")
+        if gname is not None and not self._grad_reported:
+            logger.error(
+                "NaN-DIAG: NON-FINITE GRAD first at step %d in '%s' "
+                "(max finite |grad|=%.3e) -> exploding loss / bad forward, "
+                "NOT the optimizer update.",
+                state.global_step, gname, gmax,
+            )
+            self._grad_reported = True
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Weights are post-update here."""
+        model = kwargs.get("model")
+        if model is None or self._weight_reported:
+            return
+        wname, wmax = self._scan(model, "weight")
+        if wname is not None:
+            logger.error(
+                "NaN-DIAG: NON-FINITE WEIGHT first at step %d in '%s' "
+                "(max finite |w|=%.3e). If grads were finite this step, the "
+                "OPTIMIZER UPDATE blew up (suspect AdamW eps too small once "
+                "the gradient vanished on the overfit set).",
+                state.global_step, wname, wmax,
+            )
+            self._weight_reported = True
+
+
+def _log_head_init_stats(model) -> None:
+    """Log the freshly-initialized classifier head stats (sanity on reinit)."""
+    for name, p in model.named_parameters():
+        if name.startswith("classifier"):
+            logger.info(
+                "NaN-DIAG: init '%s' shape=%s mean=%.4e std=%.4e max|.|=%.4e "
+                "finite=%s",
+                name, tuple(p.shape), float(p.mean()), float(p.std()),
+                float(p.abs().max()), bool(torch.isfinite(p).all()),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Overfit sanity check (Step 5) — the HARD GATE before full training
 # ---------------------------------------------------------------------------
 
@@ -592,6 +694,9 @@ def overfit_sanity_check(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = _load_deberta_model(model_name, num_labels=2)
 
+    # NaN-DIAG: confirm the reinitialized 2-class head is sane (finite, small).
+    _log_head_init_stats(model)
+
     overfit_dataset = _QADataset(
         contexts, answers, labels, tokenizer, max_length=max_length,
     )
@@ -616,7 +721,10 @@ def overfit_sanity_check(
         warmup_ratio=0.1,
         weight_decay=cfg.get("weight_decay", 0.01),
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
-        logging_steps=10,
+        # NaN-DIAG: log EVERY step and do NOT hide nan/inf losses, so the raw
+        # loss/grad_norm trajectory is visible up to the exact divergence step.
+        logging_steps=1,
+        logging_nan_inf_filter=False,
         save_strategy="no",
         eval_strategy="no",
         report_to="none",
@@ -628,9 +736,28 @@ def overfit_sanity_check(
         args=args,
         train_dataset=overfit_dataset,
         data_collator=data_collator,
+        callbacks=[_NaNDiagnosticCallback()],
     )
 
-    logger.info("Starting overfit training via HF Trainer ...")
+    # NaN-DIAG: inspect the first tokenized batch (input id range, seq len,
+    # label balance) — a bad input range is a classic silent NaN source.
+    _diag_batch = data_collator([overfit_dataset[i] for i in range(min(batch_size, len(overfit_dataset)))])
+    logger.info(
+        "NaN-DIAG: first batch input_ids[min=%d max=%d] seq_len=%d "
+        "vocab_size=%d attn_sum=%s labels=%s",
+        int(_diag_batch["input_ids"].min()),
+        int(_diag_batch["input_ids"].max()),
+        int(_diag_batch["input_ids"].shape[1]),
+        int(getattr(model.config, "vocab_size", -1)),
+        _diag_batch["attention_mask"].sum(dim=1).tolist()
+        if "attention_mask" in _diag_batch else "n/a",
+        _diag_batch.get("labels").tolist() if "labels" in _diag_batch else "n/a",
+    )
+
+    logger.info(
+        "Starting overfit training via HF Trainer "
+        "(NaN-DIAG: logging_steps=1, nan_inf_filter=OFF) ..."
+    )
     train_result = trainer.train()
     logger.info(
         "Overfit training done: %d steps, final train loss=%.4f",
@@ -884,6 +1011,9 @@ def train_classifier(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = _load_deberta_model(model_name, num_labels=2)
 
+    # NaN-DIAG: confirm the reinitialized 2-class head is sane (finite, small).
+    _log_head_init_stats(model)
+
     # Step 3: truncation collision diagnostic
     _truncation_collision_diagnostic(
         tokenizer, train_df, train_contexts, max_length=max_length, n=200,
@@ -941,6 +1071,8 @@ def train_classifier(
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_steps=10,
+        # NaN-DIAG: never mask nan/inf losses as 0.0 — show the real value.
+        logging_nan_inf_filter=False,
         load_best_model_at_end=True,
         metric_for_best_model="roc_auc",
         greater_is_better=True,
@@ -985,6 +1117,7 @@ def train_classifier(
             class_weights=class_weights,
             optimizers=(optimizer, scheduler),
             callbacks=[
+                _NaNDiagnosticCallback(),
                 EarlyStoppingCallback(
                     early_stopping_patience=early_stopping_patience,
                 ),
@@ -1000,6 +1133,7 @@ def train_classifier(
             compute_metrics=_compute_metrics,
             optimizers=(optimizer, scheduler),
             callbacks=[
+                _NaNDiagnosticCallback(),
                 EarlyStoppingCallback(
                     early_stopping_patience=early_stopping_patience,
                 ),
@@ -1018,12 +1152,16 @@ def train_classifier(
         pilot_out = model(**pilot_batch)
     logger.info(
         "DIAGNOSTIC pre-flight: loss=%.4f, logits_mean=%.4f, "
-        "logits_std=%.4f, any_nan=%s, seq_len=%d",
+        "logits_std=%.4f, any_nan=%s, seq_len=%d, "
+        "input_ids[min=%d max=%d], vocab_size=%d",
         pilot_out.loss.item(),
         pilot_out.logits.mean().item(),
         pilot_out.logits.std().item(),
         bool(torch.isnan(pilot_out.logits).any()),
         pilot_batch["input_ids"].shape[1],
+        int(pilot_batch["input_ids"].min()),
+        int(pilot_batch["input_ids"].max()),
+        int(getattr(model.config, "vocab_size", -1)),
     )
     if torch.isnan(pilot_out.logits).any():
         raise RuntimeError(
