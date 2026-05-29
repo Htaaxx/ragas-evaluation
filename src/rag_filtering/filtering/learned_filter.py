@@ -652,7 +652,7 @@ def overfit_sanity_check(
     # fast -> escapes the ln 2 plateau). A single shared eps cannot do both:
     # eps=1e-8 NaN'd the backbone, eps=1.0 froze the head at F1~random.
     backbone_eps = float(cfg.get("backbone_adam_epsilon", 1.0))
-    head_eps = float(cfg.get("head_adam_epsilon", 1e-8))
+    head_eps = float(cfg.get("head_adam_epsilon", 1e-3))
     backbone_lr = float(cfg.get("learning_rate", 1e-5))
     if learning_rate is None:
         learning_rate = float(cfg.get("overfit_learning_rate", 2e-4))
@@ -870,7 +870,7 @@ def _build_differential_optimizer(
     num_training_steps: int,
     warmup_ratio: float,
     backbone_eps: float = 1.0,
-    head_eps: float = 1e-8,
+    head_eps: float = 1e-3,
 ):
     """Build AdamW with differential LRs + per-group eps + warmup scheduler.
 
@@ -905,14 +905,14 @@ def _build_differential_optimizer(
         suffix = "nodecay" if _no_decay(name) else "decay"
         groups[f"{prefix}_{suffix}"].append(param)
 
-    # PER-GROUP eps (the real fix). On PyTorch 2.9+/Transformers 5.0 a tiny eps
-    # makes AdamW updates ~ +/-lr; for the pretrained backbone that destabilizes
-    # DeBERTa-v3's disentangled attention -> loss explodes to NaN. So the
-    # backbone gets a LARGE eps (SGD-like, stable). But the same large eps on
-    # the from-scratch head makes its updates ~lr*grad (too small) -> the model
-    # never learns and the loss sits at ln 2. So the head keeps the STANDARD
-    # small eps (Adam-like, learns fast). This is the DataFog recipe:
-    # eps=1.0 backbone, eps=1e-8 head.
+    # PER-GROUP eps (the real fix). On PyTorch 2.9+/Transformers 5.0, eps=1e-8
+    # is pathological: a single AdamW step turns a finite gradient into a NaN
+    # weight (backbone word-embeddings AND the fresh classifier head both blew
+    # up in testing). A LARGE eps fully stabilizes but freezes learning (loss
+    # stuck at ln 2). The fix is per-group middle-ground:
+    #   - backbone: large eps (SGD-like, stable) — it's pretrained, barely moves
+    #   - head: moderate eps (~1e-3) — small enough vs the head's gradient RMS
+    #     (~1e-2) to learn at near-Adam speed, large enough to dodge the bug.
     optimizer_grouped_parameters = [
         {"params": groups["backbone_decay"], "lr": backbone_lr,
          "weight_decay": weight_decay, "eps": backbone_eps},
@@ -924,7 +924,12 @@ def _build_differential_optimizer(
          "weight_decay": 0.0, "eps": head_eps},
     ]
 
-    optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
+    # fused=False, foreach=False: force the single-tensor AdamW path. The
+    # "finite grad -> NaN weight in one step" symptom is a hallmark of a fused/
+    # foreach CUDA-kernel bug on this torch version; the reference path is safe.
+    optimizer = torch.optim.AdamW(
+        optimizer_grouped_parameters, fused=False, foreach=False,
+    )
 
     warmup_steps = int(warmup_ratio * num_training_steps)
     scheduler = get_linear_schedule_with_warmup(
@@ -990,7 +995,7 @@ def train_classifier(
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
     backbone_eps: float = float(cfg.get("backbone_adam_epsilon", 1.0))
-    head_eps: float = float(cfg.get("head_adam_epsilon", 1e-8))
+    head_eps: float = float(cfg.get("head_adam_epsilon", 1e-3))
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     early_stopping_patience: int = cfg.get("early_stopping_patience", 3)
     use_fp16: bool = cfg.get("fp16", False)
