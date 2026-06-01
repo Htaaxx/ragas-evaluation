@@ -73,8 +73,28 @@ class QAPipeline:
         return documents, scores
 
     def build_prompt(self, question: str, contexts: List[str]) -> str:
-        """Build prompt from question and contexts."""
+        """Build prompt from question and contexts.
+
+        The joined context is token-capped so the instruction + question
+        (placed first by the template) always fit within the generator's
+        input window. Without this, long retrieved passages push the
+        question past ``generator_max_input_tokens``; the model then sees
+        only context and no question, and tends to echo the passage
+        verbatim instead of answering.
+        """
         context_str = "\n".join(f"- {ctx}" for ctx in contexts)
+
+        # Reserve room for the instruction, question and scaffolding tokens.
+        reserve = 80
+        q_ids = self.tokenizer(question, add_special_tokens=False)["input_ids"]
+        budget = self.config.generator_max_input_tokens - reserve - len(q_ids)
+        if budget > 0:
+            ctx_ids = self.tokenizer(context_str, add_special_tokens=False)["input_ids"]
+            if len(ctx_ids) > budget:
+                context_str = self.tokenizer.decode(
+                    ctx_ids[:budget], skip_special_tokens=True
+                )
+
         return self.config.qa_prompt_template.format(
             context=context_str, question=question
         )
@@ -104,13 +124,20 @@ class QAPipeline:
             max_length=self.config.generator_max_input_tokens,
         ).to(self.device)
 
+        gen_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "num_beams": 4,
+            "no_repeat_ngram_size": 3,
+            "early_stopping": True,
+        }
+        if do_sample and temperature:
+            gen_kwargs["do_sample"] = True
+            gen_kwargs["temperature"] = temperature
+        else:
+            gen_kwargs["do_sample"] = False
+
         with torch.no_grad():
-            outputs = self.generator.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample and temperature is not None,
-                temperature=temperature if temperature else 1.0,
-            )
+            outputs = self.generator.generate(**inputs, **gen_kwargs)
 
         return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 

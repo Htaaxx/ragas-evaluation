@@ -113,10 +113,16 @@ class RAGConfig:
     
     # ==================== Prompt Templates ====================
     # Prompt template for QA
+    # Question/instruction come FIRST so they survive right-side input
+    # truncation; if the context is long, only its tail is cut, never the
+    # question. The explicit "in your own words" cue discourages the model
+    # from echoing the passage verbatim.
     qa_prompt_template: str = (
-        "Use the context to answer.\n"
-        "Context:\n{context}\n"
+        "Answer the question using only the information in the context. "
+        "Give a short, direct answer in your own words; "
+        "do not copy the context verbatim.\n"
         "Question: {question}\n"
+        "Context:\n{context}\n"
         "Answer:"
     )
     
