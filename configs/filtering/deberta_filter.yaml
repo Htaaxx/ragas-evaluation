@@ -38,15 +38,16 @@ learned_filter:
   warmup_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
-  # Per-group AdamW epsilon: ROOT-CAUSE FIX for the NaN explosion on PyTorch
-  # 2.9+/Transformers 5.0, where eps=1e-8 is pathological (a single AdamW step
-  # turns a finite gradient into a NaN weight). A LARGE eps stabilizes but
-  # freezes learning (loss stuck at ln 2, F1 random). So we use a per-group
-  # middle ground (and the non-fused AdamW path, see _build_differential_optimizer):
-  #   - backbone: large eps -> SGD-like, stable (pretrained, barely needs to move)
-  #   - head: moderate eps (~1e-3) -> small vs the head's gradient RMS (~1e-2)
-  #     so it still learns at near-Adam speed, but large enough to dodge the bug.
-  backbone_adam_epsilon: 1.0
+  # Per-group AdamW epsilon. The ORIGINAL NaN explosion (finite grad -> NaN
+  # weight in one step) was the fused/foreach AdamW CUDA-kernel bug on PyTorch
+  # 2.9+/Transformers 5.0, NOT eps itself: _build_differential_optimizer forces
+  # fused=False, foreach=False, after which the head trained cleanly at eps=1e-3
+  # for 400 steps with zero instability. Earlier eps=1.0 froze the backbone
+  # (SGD-like, ~no movement), leaving the model a linear probe on fixed MNLI
+  # features -> it could memorize 28/32 but never the 4 pairs whose frozen
+  # features collide (F1 stuck at 0.857). So the backbone now uses a normal
+  # Adam-like eps and actually learns. Values stay well above the 1e-8 regime.
+  backbone_adam_epsilon: 1.0e-6
   head_adam_epsilon: 1.0e-3
   # overfit_learning_rate: head LR for the sanity gate (backbone uses
   # learning_rate above). The gate fits 32 samples in 50 epochs. At 2e-4 the
