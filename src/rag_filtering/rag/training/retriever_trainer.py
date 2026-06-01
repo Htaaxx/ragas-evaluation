@@ -347,8 +347,16 @@ class RetrieverTrainer:
 
             q_features = self.model.tokenize(questions)
             p_features = self.model.tokenize(passages)
-            q_features = {k: v.to(self.device) for k, v in q_features.items()}
-            p_features = {k: v.to(self.device) for k, v in p_features.items()}
+            # Newer sentence-transformers return non-tensor entries (e.g. raw
+            # text) in the feature dict; only move actual tensors to device.
+            q_features = {
+                k: (v.to(self.device) if hasattr(v, "to") else v)
+                for k, v in q_features.items()
+            }
+            p_features = {
+                k: (v.to(self.device) if hasattr(v, "to") else v)
+                for k, v in p_features.items()
+            }
 
             with autocast(_AMP_DEVICE, enabled=hp["use_fp16"]):
                 q_emb = self.model(q_features)["sentence_embedding"]
