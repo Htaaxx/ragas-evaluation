@@ -163,11 +163,16 @@ def _format_hypothesis(answer: str) -> str:
 
 
 # Truncation strategy used everywhere (training + inference + diagnostic).
-# ``"only_first"`` truncates ONLY the context (text_a = Premise), preserving
-# the entire answer (text_b = Hypothesis). Hallucinations differ from correct
-# answers in a single trailing entity at the end of the answer, so the answer
-# tail MUST never be truncated.
-_TRUNCATION_STRATEGY = "only_first"
+# ``"longest_first"`` cuts tokens from whichever sequence is currently longer.
+# For ASQA the premise (context = long Wikipedia passage) is virtually always
+# the longer sequence, so in practice this truncates ONLY the context and
+# preserves the full answer (text_b = Hypothesis) — the discriminative trailing
+# entity stays intact. Unlike ``"only_first"`` it cannot crash: if an answer is
+# itself longer than ``max_length`` (seen in the test split), ``"only_first"``
+# raises "Sequence to truncate too short to respect the provided max_length"
+# because the premise has already been truncated to nothing; ``"longest_first"``
+# instead trims the over-long answer, which is the only feasible option.
+_TRUNCATION_STRATEGY = "longest_first"
 
 
 # ---------------------------------------------------------------------------
