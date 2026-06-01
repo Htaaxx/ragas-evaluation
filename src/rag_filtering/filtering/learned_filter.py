@@ -651,11 +651,13 @@ def overfit_sanity_check(
     # 2-class head gets a higher LR + the STANDARD small eps (Adam-like, learns
     # fast -> escapes the ln 2 plateau). A single shared eps cannot do both:
     # eps=1e-8 NaN'd the backbone, eps=1.0 froze the head at F1~random.
-    backbone_eps = float(cfg.get("backbone_adam_epsilon", 1e-6))
+    backbone_eps = float(cfg.get("backbone_adam_epsilon", 1.0))
     head_eps = float(cfg.get("head_adam_epsilon", 1e-3))
-    backbone_lr = float(cfg.get("learning_rate", 1e-5))
+    # GATE backbone LR: SGD-like (eps=1.0) tolerates a higher LR than full
+    # training because updates are gradient-proportional (no feature collapse).
+    backbone_lr = float(cfg.get("overfit_backbone_lr", 1e-2))
     if learning_rate is None:
-        learning_rate = float(cfg.get("overfit_learning_rate", 5e-4))
+        learning_rate = float(cfg.get("overfit_learning_rate", 2e-4))
     if batch_size is None:
         batch_size = cfg.get("batch_size", 4)
 
@@ -869,7 +871,7 @@ def _build_differential_optimizer(
     weight_decay: float,
     num_training_steps: int,
     warmup_ratio: float,
-    backbone_eps: float = 1e-6,
+    backbone_eps: float = 1.0,
     head_eps: float = 1e-3,
 ):
     """Build AdamW with differential LRs + per-group eps + warmup scheduler.
@@ -907,11 +909,14 @@ def _build_differential_optimizer(
 
     # PER-GROUP eps. The NaN explosion (finite grad -> NaN weight in one step)
     # was the fused/foreach AdamW CUDA-kernel bug on PyTorch 2.9+/Transformers
-    # 5.0; it is killed below via fused=False, foreach=False. With the reference
-    # kernel, normal Adam-like epsilons are stable AND learn:
-    #   - backbone: ~1e-6 (Adam-like). eps=1.0 froze it (SGD-like, ~no movement),
-    #     reducing the model to a linear probe on fixed MNLI features that could
-    #     not separate hard pairs; a real eps lets the backbone adapt features.
+    # 5.0; it is killed below via fused=False, foreach=False. The epsilons set
+    # the optimizer REGIME per group:
+    #   - backbone: LARGE eps (~1.0) -> gradient-PROPORTIONAL (SGD-like). A small
+    #     Adam-like eps makes the update ~ +/-lr for every weight including the
+    #     ~184M near-zero-gradient ones, which injects noise and collapses the
+    #     MNLI features (tested: eps=1e-6 -> all logits ~0.5). Proportional
+    #     updates move only what matters, so adapt the backbone via its LR, not
+    #     a smaller eps.
     #   - head: ~1e-3 — small vs the head's gradient RMS (~1e-2) so it learns at
     #     near-Adam speed (the from-scratch head needs to escape the ln 2 plateau).
     optimizer_grouped_parameters = [
@@ -995,7 +1000,7 @@ def train_classifier(
     warmup_ratio: float = cfg.get("warmup_ratio", 0.1)
     weight_decay: float = cfg.get("weight_decay", 0.01)
     max_grad_norm: float = cfg.get("max_grad_norm", 1.0)
-    backbone_eps: float = float(cfg.get("backbone_adam_epsilon", 1e-6))
+    backbone_eps: float = float(cfg.get("backbone_adam_epsilon", 1.0))
     head_eps: float = float(cfg.get("head_adam_epsilon", 1e-3))
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     early_stopping_patience: int = cfg.get("early_stopping_patience", 3)

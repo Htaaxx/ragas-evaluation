@@ -40,23 +40,30 @@ learned_filter:
   max_grad_norm: 1.0
   # Per-group AdamW epsilon. The ORIGINAL NaN explosion (finite grad -> NaN
   # weight in one step) was the fused/foreach AdamW CUDA-kernel bug on PyTorch
-  # 2.9+/Transformers 5.0, NOT eps itself: _build_differential_optimizer forces
-  # fused=False, foreach=False, after which the head trained cleanly at eps=1e-3
-  # for 400 steps with zero instability. Earlier eps=1.0 froze the backbone
-  # (SGD-like, ~no movement), leaving the model a linear probe on fixed MNLI
-  # features -> it could memorize 28/32 but never the 4 pairs whose frozen
-  # features collide (F1 stuck at 0.857). So the backbone now uses a normal
-  # Adam-like eps and actually learns. Values stay well above the 1e-8 regime.
-  backbone_adam_epsilon: 1.0e-6
+  # 2.9+/Transformers 5.0 (killed via fused=False, foreach=False in
+  # _build_differential_optimizer). The epsilons then control the optimizer
+  # *regime* per group:
+  #   - backbone: LARGE eps (1.0) -> SGD-like / gradient-PROPORTIONAL. This is
+  #     mandatory for the pretrained backbone: a small (Adam-like) eps makes the
+  #     update ~ +/-lr for EVERY weight including the ~184M near-zero-gradient
+  #     ones, injecting uniform noise that collapses the MNLI features (tested:
+  #     eps=1e-6 -> all logits ~0.5, F1=0.667). Gradient-proportional updates
+  #     move only the weights that matter, preserving the representation.
+  #   - head: moderate eps (1e-3) -> near-Adam, so the from-scratch head escapes
+  #     the ln 2 plateau and learns fast.
+  backbone_adam_epsilon: 1.0
   head_adam_epsilon: 1.0e-3
-  # overfit_learning_rate: head LR for the sanity gate (backbone uses
-  # learning_rate above). The gate fits 32 samples in 50 epochs. At 2e-4 the
-  # gate reached F1=0.857 (stable, P=1.0, only 4 positives under-fit); 5e-4
-  # gives the head enough push to clear the last few. This is the GATE LR only
-  # (gate-isolated) — full-training head LR stays at classifier_lr=5e-5. The
-  # old "5e-4 forbidden" note applied under the eps=1e-8 NaN regime, which the
-  # per-group eps + non-fused AdamW fix has eliminated.
-  overfit_learning_rate: 5.0e-4
+  # overfit_learning_rate: head LR for the sanity gate. 2e-4 already drives the
+  # head to convergence (F1=0.857, P=1.0); pushing it higher does NOT fix the
+  # remaining 4 hard pairs (they need the backbone, not the head).
+  overfit_learning_rate: 2.0e-4
+  # overfit_backbone_lr: GATE-ONLY backbone LR. Because the backbone runs
+  # SGD-like (eps=1.0, gradient-proportional), it tolerates a much larger LR
+  # than the Adam regime would — only the weights with real gradients (those
+  # encoding the 4 hard pairs) move, so the representation is preserved. This
+  # is what finally lets the gate fit all 32. Full-training backbone LR stays
+  # at learning_rate=1e-5 (frozen-probe, stable over thousands of samples).
+  overfit_backbone_lr: 1.0e-2
   label_smoothing: 0.0
   early_stopping_patience: 3
   fp16: false                # NEVER set to true (DeBERTa-v3 instability)
