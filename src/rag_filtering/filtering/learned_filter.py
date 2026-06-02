@@ -130,22 +130,40 @@ def _load_deberta_model(model_name_or_path: str, num_labels: int = 2):
 # ---------------------------------------------------------------------------
 
 def _extract_top1_context(context_str: str, max_chars: int = 800) -> str:
-    """Extract top-1 passage from the context dict string.
+    """Extract the top-1 passage from a context cell.
 
-    The context column in labeled_asqa.csv is a stringified dict with
-    'title' (list) and 'sentences' (list of list of strings). The first
-    title+sentences is the primary source passage.
+    Handles three formats seen across datasets:
+
+    1. ASQA dict string ``{'title': [...], 'sentences': [[...]]}`` (labeled_asqa.csv)
+       -> ``"title: sentences"``.
+    2. Stringified list of passages (RAG ``contexts`` column) -> first passage.
+    3. Plain-text passage (merged / external datasets such as
+       ``labeled_merged.csv``) -> the text as-is.
     """
     import ast
 
-    try:
-        ctx = ast.literal_eval(context_str)
-        title = ctx["title"][0]
-        sentences = " ".join(ctx["sentences"][0])
-        passage = f"{title}: {sentences}"
-        return passage[:max_chars]
-    except (ValueError, KeyError, IndexError, TypeError):
+    if context_str is None:
         return ""
+    raw = str(context_str)
+
+    try:
+        ctx = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        # Already a plain-text passage; nothing to parse.
+        return raw[:max_chars]
+
+    if isinstance(ctx, dict):
+        try:
+            title = ctx["title"][0]
+            sentences = " ".join(ctx["sentences"][0])
+            return f"{title}: {sentences}"[:max_chars]
+        except (KeyError, IndexError, TypeError):
+            return raw[:max_chars]
+
+    if isinstance(ctx, (list, tuple)) and ctx:
+        return str(ctx[0])[:max_chars]
+
+    return raw[:max_chars]
 
 
 # ---------------------------------------------------------------------------
