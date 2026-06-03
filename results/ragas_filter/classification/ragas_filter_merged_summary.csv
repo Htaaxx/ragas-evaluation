@@ -1,0 +1,4 @@
+﻿dataset,num_samples,accepted,acceptance_rate,accuracy,precision,recall,f1,roc_auc,prediction_path
+ASQA,1742,831,0.4770378874856487,0.9081515499425947,0.927797833935018,0.8851894374282434,0.9059929494712103,0.9666271662090501,..\results\ragas_filter\classification\asqa_test_filtered-2.csv
+MS MARCO,1000,479,0.479,0.969,0.9895615866388309,0.948,0.9683350357507661,0.990424,..\results\ragas_filter\classification\msmacro_filtered-2.csv
+WikiEval,100,50,0.5,0.92,0.92,0.92,0.92,0.9776,..\results\ragas_filter\classification\wikieval_filtered-2.csv

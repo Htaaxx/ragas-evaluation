@@ -180,6 +180,8 @@ class RagasFeatureExtractor:
             # if raw df have label column, keep it for training filter model
             if "label" in df.columns:
                 out["label"] = df["label"]
+            if "dataset" in df.columns:
+                out["dataset"] = df["dataset"]
 
         if feature_path is not None:
             feature_path = _ensure_path(feature_path)

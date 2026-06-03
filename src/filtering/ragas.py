@@ -79,7 +79,7 @@ class SelfEvaluationResult:
         self.summary = {
             col: df[col].mean()
             for col in df.columns
-            if col not in ["sample_idx", "question", "answer", "contexts", "ground_truth"]
+            if col not in ["sample_idx", "question", "answer", "contexts", "ground_truth", "dataset"]
         }
 
     def to_pandas(self):

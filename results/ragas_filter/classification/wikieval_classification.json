@@ -1,44 +1,44 @@
 {
-  "accuracy": 0.9,
-  "precision": 0.9,
-  "recall": 0.9,
-  "f1": 0.9,
+  "accuracy": 0.92,
+  "precision": 0.92,
+  "recall": 0.92,
+  "f1": 0.92,
   "confusion_matrix": [
     [
-      45,
-      5
+      46,
+      4
     ],
     [
-      5,
-      45
+      4,
+      46
     ]
   ],
   "classification_report": {
     "0": {
-      "precision": 0.9,
-      "recall": 0.9,
-      "f1-score": 0.9,
+      "precision": 0.92,
+      "recall": 0.92,
+      "f1-score": 0.92,
       "support": 50.0
     },
     "1": {
-      "precision": 0.9,
-      "recall": 0.9,
-      "f1-score": 0.9,
+      "precision": 0.92,
+      "recall": 0.92,
+      "f1-score": 0.92,
       "support": 50.0
     },
-    "accuracy": 0.9,
+    "accuracy": 0.92,
     "macro avg": {
-      "precision": 0.9,
-      "recall": 0.9,
-      "f1-score": 0.9,
+      "precision": 0.92,
+      "recall": 0.92,
+      "f1-score": 0.92,
       "support": 100.0
     },
     "weighted avg": {
-      "precision": 0.9,
-      "recall": 0.9,
-      "f1-score": 0.9,
+      "precision": 0.92,
+      "recall": 0.92,
+      "f1-score": 0.92,
       "support": 100.0
     }
   },
-  "roc_auc": 0.9532
+  "roc_auc": 0.9776
 }
