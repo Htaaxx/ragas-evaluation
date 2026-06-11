@@ -64,7 +64,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
-from .helper import (
+from ..helper import (
     DEFAULT_RAGAS_FEATURE_COLS,
     _ensure_path,
     _normalize_col_aliases,

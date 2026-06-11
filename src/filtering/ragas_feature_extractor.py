@@ -55,7 +55,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-from .helper import (
+from ..helper import (
     DEFAULT_RAGAS_FEATURE_COLS,
     RAW_REQUIRED_COLS,
     _ensure_path,

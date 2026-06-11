@@ -38,7 +38,7 @@ import seaborn as sns
 from IPython.display import display
 
 from .evaluator import TraditionalEvaluator
-from ..filtering.helper import GOLD_ANSWER_CANDIDATES, _ensure_path, _safe_json_dump, _get_gold_col
+from ..helper import GOLD_ANSWER_CANDIDATES, _ensure_path, _safe_json_dump, _get_gold_col
 
 from sklearn.metrics import (
     accuracy_score,

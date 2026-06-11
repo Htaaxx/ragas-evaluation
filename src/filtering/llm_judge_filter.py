@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 RAW_REQUIRED_COLS = ["id", "question", "answer", "context"]
 
 
-from .helper import _ensure_path, _normalize_col_aliases, parse_context
+from ..helper import _ensure_path, _normalize_col_aliases, parse_context
 from ..evaluation.filter_evaluator import FilterEvaluator
 
 

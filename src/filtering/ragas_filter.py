@@ -64,7 +64,7 @@ from sklearn.base import BaseEstimator, clone
 
 logger = logging.getLogger(__name__)
 
-from .helper import (
+from ..helper import (
     DEFAULT_RAGAS_FEATURE_COLS,
     _ensure_path,
     _normalize_col_aliases,
