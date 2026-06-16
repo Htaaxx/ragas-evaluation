@@ -68,14 +68,13 @@ class FilterEvaluator:
         answer_col: str = "answer",
         context_col: str = "context",
         gold_col: Optional[str] = None,
-        output_dir: Union[str, Path] = "./results/filter_eval",
+        output_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         self.label_col = label_col
         self.answer_col = answer_col
         self.context_col = context_col
         self.gold_col = gold_col
-        self.output_dir = _ensure_path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = output_dir
 
     def evaluate_classification(
         self,
@@ -258,7 +257,7 @@ class FilterEvaluator:
             if self.label_col in df.columns:
                 results["classification"] = self.evaluate_classification(
                     df=df,
-                    save_path=self.output_dir / f"{output_prefix}_classification.json",
+                    save_path=None,
                 )
             else:
                 logger.warning("Skip classification eval: no `%s` column.", self.label_col)
@@ -270,7 +269,7 @@ class FilterEvaluator:
                     df=df,
                     evaluator=evaluator,
                     gold_col=gold_col,
-                    save_path=self.output_dir / f"{output_prefix}_quality.csv",
+                    save_path=None,
                 )
             else:
                 logger.warning("Skip answer quality eval: no gold answer column.")

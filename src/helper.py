@@ -93,7 +93,7 @@ def _normalize_col_aliases(df: pd.DataFrame) -> pd.DataFrame:
         if old in df.columns and new not in df.columns:
             rename[old] = new
     df = df.rename(columns=rename) if rename else df
-    df['id'] = df['id'].astype(str)
+    #df['id'] = df['id'].astype(str)
     return df
 
 
