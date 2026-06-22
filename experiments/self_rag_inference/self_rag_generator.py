@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ class SelfRAGGenerator:
 
     def _load_vllm(self) -> None:
         try:
-            from vllm import LLM
+            LLM = import_module("vllm").LLM
         except ImportError as exc:
             raise ImportError(
                 "vLLM is required for backend='vllm'. Install it on Kaggle with "
@@ -162,6 +163,7 @@ class SelfRAGGenerator:
 
         logger.info("Loading Self-RAG model with transformers: %s", self.model_cfg["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_cfg["name"], token=False)
+        self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -178,7 +180,7 @@ class SelfRAGGenerator:
             raise RuntimeError("Model is not loaded. Call load_model() first.")
 
         if self.backend == "vllm":
-            from vllm import SamplingParams
+            SamplingParams = import_module("vllm").SamplingParams
 
             sampling_params = SamplingParams(
                 temperature=float(self.model_cfg.get("temperature", 0.0)),
@@ -194,13 +196,16 @@ class SelfRAGGenerator:
 
         encoded = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
         input_length = encoded["input_ids"].shape[1]
-        generated = self.model.generate(
-            **encoded,
-            max_new_tokens=int(self.model_cfg["max_new_tokens"]),
-            do_sample=float(self.model_cfg.get("temperature", 0.0)) > 0.0,
-            temperature=max(float(self.model_cfg.get("temperature", 0.0)), 1e-6),
-            top_p=float(self.model_cfg.get("top_p", 1.0)),
-        )
+        temperature = float(self.model_cfg.get("temperature", 0.0))
+        generate_kwargs = {
+            "max_new_tokens": int(self.model_cfg["max_new_tokens"]),
+            "do_sample": temperature > 0.0,
+        }
+        if temperature > 0.0:
+            generate_kwargs["temperature"] = temperature
+            generate_kwargs["top_p"] = float(self.model_cfg.get("top_p", 1.0))
+
+        generated = self.model.generate(**encoded, **generate_kwargs)
         generated_only = generated[:, input_length:]
         return self.tokenizer.batch_decode(generated_only, skip_special_tokens=False)
 
