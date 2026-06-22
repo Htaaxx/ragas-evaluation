@@ -5,7 +5,7 @@ seed: 42
 
 model:
   name: "selfrag/selfrag_llama2_7b"
-  backend: "vllm"  # vllm | hf
+  backend: "hf"  # hf | vllm
   dtype: "half"
   tensor_parallel_size: 2
   max_new_tokens: 160

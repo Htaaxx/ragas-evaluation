@@ -162,6 +162,8 @@ class SelfRAGGenerator:
 
         logger.info("Loading Self-RAG model with transformers: %s", self.model_cfg["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_cfg["name"], token=False)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_cfg["name"],
             token=False,
@@ -191,6 +193,7 @@ class SelfRAGGenerator:
             raise RuntimeError("Tokenizer is not loaded for HF backend.")
 
         encoded = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
+        input_length = encoded["input_ids"].shape[1]
         generated = self.model.generate(
             **encoded,
             max_new_tokens=int(self.model_cfg["max_new_tokens"]),
@@ -198,8 +201,8 @@ class SelfRAGGenerator:
             temperature=max(float(self.model_cfg.get("temperature", 0.0)), 1e-6),
             top_p=float(self.model_cfg.get("top_p", 1.0)),
         )
-        decoded = self.tokenizer.batch_decode(generated, skip_special_tokens=False)
-        return [text[len(prompt) :].strip() if text.startswith(prompt) else text for text, prompt in zip(decoded, prompts)]
+        generated_only = generated[:, input_length:]
+        return self.tokenizer.batch_decode(generated_only, skip_special_tokens=False)
 
     def generate_answer(
         self,

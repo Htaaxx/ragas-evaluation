@@ -8,7 +8,6 @@ bitsandbytes>=0.43.0
 
 # Vector search
 faiss-cpu>=1.7.4  # Use faiss-gpu for GPU support
-vllm>=0.6.0  # Kaggle/Linux runtime for selfrag/selfrag_llama2_7b
 
 # Data processing
 pandas>=1.5.0

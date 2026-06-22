@@ -13,7 +13,7 @@ MS MARCO CSV -> split context passages -> FAISS retrieval -> Self-RAG 7B
 - Input: `data/ms-macro/msmarcro_500.csv`
 - Retriever: `sentence-transformers/all-MiniLM-L6-v2` + FAISS
 - Generator: `selfrag/selfrag_llama2_7b`
-- Primary runtime: Kaggle GPU T4 x2 with vLLM tensor parallelism
+- Primary runtime: Kaggle GPU T4 x2 with the HuggingFace 4-bit fallback
 - Outputs: `results/self_rag_inference/msmarco_predictions.csv` and
   `results/self_rag_inference/metrics.json`
 
@@ -46,9 +46,15 @@ Recommended Kaggle settings:
 
 - Accelerator: GPU T4 x2
 - Internet: On
-- Install: `pip install vllm`
-- Backend: `model.backend: vllm`
-- Tensor parallelism: `model.tensor_parallel_size: 2`
+- Install: `pip install accelerate bitsandbytes sentence-transformers faiss-cpu rouge-score`
+- Backend: `model.backend: hf`
+- Quantization: `hf_fallback.load_in_4bit: true`
+
+Do not install vLLM in Kaggle's shared environment by default. Recent vLLM
+wheels can upgrade CUDA/numpy/protobuf/starlette packages and trigger resolver
+conflicts with Kaggle's preinstalled RAPIDS, TensorFlow, Colab, and Google
+packages. Use vLLM only in a clean Linux environment or if you are prepared to
+manage those dependency changes manually.
 
 The notebook runs the same CLI:
 
@@ -68,7 +74,7 @@ configs/experiments/self_rag_inference.yaml
 Important knobs:
 
 - `model.name`: `selfrag/selfrag_llama2_7b`
-- `model.backend`: `vllm` or `hf`
+- `model.backend`: `hf` or `vllm`
 - `retriever.top_k`: number of retrieved passages
 - `data.max_samples`: optional row limit for debugging
 - `generation.score_weights`: weights for `[Relevant]`, `[Fully supported]`,
