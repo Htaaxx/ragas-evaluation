@@ -1,0 +1,53 @@
+# Self-RAG answer-generation inference config.
+# New pipeline only; does not replace the self_rag_verifier experiment.
+
+seed: 42
+
+model:
+  name: "selfrag/selfrag_llama2_7b"
+  backend: "vllm"  # vllm | hf
+  dtype: "half"
+  tensor_parallel_size: 2
+  max_new_tokens: 160
+  temperature: 0.0
+  top_p: 1.0
+  download_dir: "models/self_rag"
+
+hf_fallback:
+  load_in_4bit: true
+  device_map: "auto"
+
+retriever:
+  encoder_model: "sentence-transformers/all-MiniLM-L6-v2"
+  top_k: 5
+  normalize_embeddings: true
+  index_batch_size: 64
+  index_dir: "results/self_rag_inference/msmarco_faiss_index"
+
+data:
+  msmarco_csv: "data/ms-macro/msmarcro_500.csv"
+  id_column: "id"
+  question_column: "question"
+  context_column: "context"
+  gold_answer_column: "gold_answer"
+  max_passage_chars: 1200
+  max_samples:
+
+generation:
+  mode: "always_retrieve"
+  prompt_template: |
+    ### Instruction:
+    {question}
+
+    ### Response:
+    [Retrieval]<paragraph>{paragraph}</paragraph>
+  score_weights:
+    relevant: 1.0
+    fully_supported: 1.5
+    utility: 0.5
+  fallback_score: 0.0
+
+evaluation:
+  results_dir: "results/self_rag_inference"
+  predictions_csv: "msmarco_predictions.csv"
+  metrics_json: "metrics.json"
