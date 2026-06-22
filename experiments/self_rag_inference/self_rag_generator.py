@@ -165,7 +165,7 @@ class SelfRAGGenerator:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_cfg["name"], token=False)
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token = self.tokenizer.unk_token or self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_cfg["name"],
             token=False,
@@ -173,6 +173,11 @@ class SelfRAGGenerator:
             device_map=fallback_cfg.get("device_map", "auto"),
             quantization_config=quantization_config,
         )
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.do_sample = False
+        self.model.generation_config.temperature = None
+        self.model.generation_config.top_p = None
         self.model.eval()
 
     def _generate_raw(self, prompts: List[str]) -> List[str]:
@@ -200,6 +205,7 @@ class SelfRAGGenerator:
         generate_kwargs = {
             "max_new_tokens": int(self.model_cfg["max_new_tokens"]),
             "do_sample": temperature > 0.0,
+            "pad_token_id": self.tokenizer.pad_token_id,
         }
         if temperature > 0.0:
             generate_kwargs["temperature"] = temperature
