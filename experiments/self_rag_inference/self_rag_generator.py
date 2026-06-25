@@ -18,7 +18,7 @@ _ANSWER_TERMINATOR = re.compile(
     r"\[(?:Fully supported|Partially supported|No support|Utility:\d+)\]"
 )
 _SPECIAL_MARKUP = re.compile(
-    r"</?s>|<pad>|<unk>|\[Retrieval\]|</?paragraph>",
+    r"</?s>|<pad>|<unk>|<\|im_start\|>|<\|im_end\|>|\[Retrieval\]|</?paragraph>",
     flags=re.IGNORECASE,
 )
 
@@ -64,6 +64,21 @@ def format_self_rag_prompt(question: str, paragraph: str, prompt_template: str) 
     return prompt_template.format(question=question, paragraph=paragraph)
 
 
+def format_seq2seq_prompt(
+    question: str,
+    contexts: List[str],
+    prompt_template: str,
+) -> str:
+    """Format a normal RAG prompt using all retrieved contexts."""
+
+    numbered_contexts = "\n\n".join(
+        f"[{index}] {context.strip()}"
+        for index, context in enumerate(contexts, start=1)
+        if context.strip()
+    )
+    return prompt_template.format(question=question, context=numbered_contexts)
+
+
 def _strip_special_tokens(text: str) -> str:
     text = _SPECIAL_MARKUP.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -75,6 +90,12 @@ def _clean_answer(raw_output: str) -> str:
     text = _ANSWER_TERMINATOR.split(text, maxsplit=1)[0]
     text = _CRITIQUE_TOKEN.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_plain_answer(raw_output: str) -> str:
+    """Clean a plain seq2seq answer without Self-RAG reflection scoring."""
+
+    return _strip_special_tokens(raw_output)
 
 
 def parse_self_rag_output(
@@ -137,6 +158,10 @@ class SelfRAGGenerator:
             self._load_vllm()
         elif self.backend == "hf":
             self._load_hf()
+        elif self.backend == "seq2seq":
+            self._load_seq2seq()
+        elif self.backend == "causal_instruct":
+            self._load_causal_instruct()
         else:
             raise ValueError(f"Unknown model backend: {self.backend}")
 
@@ -190,6 +215,72 @@ class SelfRAGGenerator:
         self.model.generation_config.top_p = None
         self.model.eval()
 
+    def _load_seq2seq(self) -> None:
+        try:
+            import torch
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        except ImportError as exc:
+            raise ImportError(
+                "transformers and accelerate are required for backend='seq2seq'."
+            ) from exc
+
+        logger.info("Loading seq2seq RAG generator: %s", self.model_cfg["name"])
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_cfg["name"], token=False)
+
+        use_cuda = torch.cuda.is_available()
+        torch_dtype = torch.float16 if use_cuda else torch.float32
+        device_map = self.model_cfg.get("device_map", "auto" if use_cuda else None)
+        kwargs = {
+            "token": False,
+            "torch_dtype": torch_dtype,
+        }
+        if device_map is not None:
+            kwargs["device_map"] = device_map
+
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model_cfg["name"],
+            **kwargs,
+        )
+        if device_map is None:
+            self.model.to("cuda" if use_cuda else "cpu")
+        self.model.eval()
+
+    def _load_causal_instruct(self) -> None:
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        except ImportError as exc:
+            raise ImportError(
+                "transformers, accelerate, and bitsandbytes are required for "
+                "backend='causal_instruct'."
+            ) from exc
+
+        logger.info("Loading causal instruct RAG generator: %s", self.model_cfg["name"])
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_cfg["name"], token=False)
+        self.tokenizer.padding_side = "left"
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        use_cuda = torch.cuda.is_available()
+        quantization_config = None
+        if self.model_cfg.get("load_in_4bit", use_cuda):
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_cfg["name"],
+            token=False,
+            torch_dtype=torch.float16 if use_cuda else torch.float32,
+            device_map=self.model_cfg.get("device_map", "auto" if use_cuda else None),
+            quantization_config=quantization_config,
+        )
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.eval()
+
     def _generate_raw(self, prompts: List[str]) -> List[str]:
         if self.model is None:
             raise RuntimeError("Model is not loaded. Call load_model() first.")
@@ -229,12 +320,133 @@ class SelfRAGGenerator:
         generated_only = generated[:, input_length:]
         return self.tokenizer.batch_decode(generated_only, skip_special_tokens=False)
 
+    def _generate_seq2seq_raw(self, prompts: List[str]) -> List[str]:
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model is not loaded. Call load_model() first.")
+
+        encoded = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=int(self.model_cfg.get("max_input_tokens", 1024)),
+        )
+        input_device = next(self.model.parameters()).device
+        encoded = encoded.to(input_device)
+
+        temperature = float(self.model_cfg.get("temperature", 0.0))
+        generate_kwargs = {
+            "max_new_tokens": int(self.model_cfg["max_new_tokens"]),
+            "num_beams": int(self.model_cfg.get("num_beams", 4)),
+            "do_sample": temperature > 0.0,
+        }
+        if temperature > 0.0:
+            generate_kwargs["temperature"] = temperature
+            generate_kwargs["top_p"] = float(self.model_cfg.get("top_p", 1.0))
+
+        generated = self.model.generate(**encoded, **generate_kwargs)
+        return self.tokenizer.batch_decode(generated, skip_special_tokens=True)
+
+    def _format_causal_chat_prompts(self, prompts: List[str]) -> List[str]:
+        if self.tokenizer is None:
+            raise RuntimeError("Tokenizer is not loaded for causal instruct backend.")
+
+        system_prompt = str(
+            self.model_cfg.get(
+                "system_prompt",
+                "You are a precise question-answering assistant. "
+                "Answer using only the provided context.",
+            )
+        )
+        if not hasattr(self.tokenizer, "apply_chat_template"):
+            return prompts
+
+        formatted_prompts = []
+        for prompt in prompts:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            formatted_prompts.append(
+                self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            )
+        return formatted_prompts
+
+    def _generate_causal_instruct_raw(self, prompts: List[str]) -> List[str]:
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model is not loaded. Call load_model() first.")
+
+        chat_prompts = self._format_causal_chat_prompts(prompts)
+        encoded = self.tokenizer(
+            chat_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=int(self.model_cfg.get("max_input_tokens", 2048)),
+        )
+        input_device = next(self.model.parameters()).device
+        encoded = encoded.to(input_device)
+        input_length = encoded["input_ids"].shape[1]
+
+        temperature = float(self.model_cfg.get("temperature", 0.0))
+        generate_kwargs = {
+            "max_new_tokens": int(self.model_cfg["max_new_tokens"]),
+            "do_sample": temperature > 0.0,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "repetition_penalty": float(self.model_cfg.get("repetition_penalty", 1.05)),
+        }
+        if temperature > 0.0:
+            generate_kwargs["temperature"] = temperature
+            generate_kwargs["top_p"] = float(self.model_cfg.get("top_p", 0.9))
+
+        generated = self.model.generate(**encoded, **generate_kwargs)
+        generated_only = generated[:, input_length:]
+        return self.tokenizer.batch_decode(generated_only, skip_special_tokens=True)
+
     def generate_answer(
         self,
         question: str,
         retrieved_passages: List[Dict[str, Any]],
     ) -> GenerationResult:
         """Generate and score one candidate per retrieved passage."""
+
+        if self.backend in {"seq2seq", "causal_instruct"}:
+            contexts = [str(passage["text"]) for passage in retrieved_passages]
+            prompt = format_seq2seq_prompt(
+                question=question,
+                contexts=contexts,
+                prompt_template=self.generation_cfg["prompt_template"],
+            )
+            if self.backend == "seq2seq":
+                raw_output = self._generate_seq2seq_raw([prompt])[0]
+            else:
+                raw_output = self._generate_causal_instruct_raw([prompt])[0]
+            answer = parse_plain_answer(raw_output)
+            best_retrieval_score = max(
+                (float(passage["score"]) for passage in retrieved_passages),
+                default=0.0,
+            )
+            joined_context = "\n\n".join(contexts)
+            candidate = GenerationCandidate(
+                answer=answer,
+                raw_output=raw_output,
+                context=joined_context,
+                retrieval_score=best_retrieval_score,
+                reflection_score=best_retrieval_score,
+                is_relevant=True,
+                is_fully_supported=True,
+                utility=0,
+            )
+            return GenerationResult(
+                answer=answer,
+                best_candidate=candidate,
+                candidates=[candidate],
+            )
 
         prompts = [
             format_self_rag_prompt(

@@ -120,6 +120,79 @@ def test_reflection_parser_removes_generated_padding_and_markup() -> None:
     assert "<paragraph>" not in parsed.answer
 
 
+def test_format_seq2seq_prompt_combines_retrieved_contexts() -> None:
+    format_seq2seq_prompt = _generator_module().format_seq2seq_prompt
+
+    prompt = format_seq2seq_prompt(
+        question="what is arthritis?",
+        contexts=[
+            "Arthritis is inflammation of the joints.",
+            "Osteoarthritis is the most common type.",
+        ],
+        prompt_template=(
+            "Answer the question using only the context.\n\n"
+            "Question: {question}\n\n"
+            "Context:\n{context}\n\n"
+            "Answer:"
+        ),
+    )
+
+    assert "Question: what is arthritis?" in prompt
+    assert "[1] Arthritis is inflammation of the joints." in prompt
+    assert "[2] Osteoarthritis is the most common type." in prompt
+    assert prompt.strip().endswith("Answer:")
+
+
+def test_plain_answer_parser_removes_seq2seq_special_tokens() -> None:
+    parse_plain_answer = _generator_module().parse_plain_answer
+
+    assert parse_plain_answer("<pad> Arthritis is joint inflammation.</s>") == (
+        "Arthritis is joint inflammation."
+    )
+
+
+def test_causal_instruct_backend_generates_one_plain_rag_answer(monkeypatch) -> None:
+    generator_module = _generator_module()
+    generator = generator_module.SelfRAGGenerator(
+        {
+            "model": {
+                "backend": "causal_instruct",
+                "name": "Qwen/Qwen2.5-7B-Instruct",
+                "max_new_tokens": 64,
+            },
+            "generation": {
+                "prompt_template": (
+                    "Answer using only the context.\n\n"
+                    "Question: {question}\n\n"
+                    "Context:\n{context}\n\n"
+                    "Answer:"
+                ),
+                "score_weights": {},
+            },
+        }
+    )
+
+    def fake_generate(prompts):
+        assert len(prompts) == 1
+        assert "[1] Arthritis is inflammation of the joints." in prompts[0]
+        assert "[2] Arthritis can cause pain." in prompts[0]
+        return ["<|im_end|> Arthritis is inflammation of the joints."]
+
+    monkeypatch.setattr(generator, "_generate_causal_instruct_raw", fake_generate)
+
+    result = generator.generate_answer(
+        "what is arthritis?",
+        [
+            {"text": "Arthritis is inflammation of the joints.", "score": 0.9},
+            {"text": "Arthritis can cause pain.", "score": 0.7},
+        ],
+    )
+
+    assert result.answer == "Arthritis is inflammation of the joints."
+    assert len(result.candidates) == 1
+    assert result.best_candidate.retrieval_score == 0.9
+
+
 def test_candidate_selection_uses_reflection_score_then_retrieval_score() -> None:
     generator = _generator_module()
     GenerationCandidate = generator.GenerationCandidate

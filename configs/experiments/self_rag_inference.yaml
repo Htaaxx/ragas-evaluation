@@ -4,14 +4,20 @@
 seed: 42
 
 model:
-  name: "selfrag/selfrag_llama2_7b"
-  backend: "hf"  # hf | vllm
+  name: "Qwen/Qwen2.5-7B-Instruct"
+  backend: "causal_instruct"  # causal_instruct | seq2seq | hf | vllm
   dtype: "half"
   tensor_parallel_size: 2
   max_new_tokens: 160
+  max_input_tokens: 2048
+  num_beams: 1
   temperature: 0.0
-  top_p: 1.0
+  top_p: 0.9
+  repetition_penalty: 1.05
+  load_in_4bit: true
   download_dir: "models/self_rag"
+  device_map: "auto"
+  system_prompt: "You answer questions using only the retrieved context. Keep answers short and factual."
 
 hf_fallback:
   load_in_4bit: true
@@ -19,7 +25,7 @@ hf_fallback:
 
 retriever:
   encoder_model: "sentence-transformers/all-MiniLM-L6-v2"
-  top_k: 5
+  top_k: 3
   normalize_embeddings: true
   index_batch_size: 64
   index_dir: "results/self_rag_inference/msmarco_faiss_index"
@@ -36,12 +42,14 @@ data:
 generation:
   mode: "always_retrieve"
   prompt_template: |
-    ### Instruction:
-    Answer the question using only the retrieved passage. Give a short, direct answer.
+    Answer the question using only the context below. If the context does not contain the answer, say "I don't know." Give a short, direct answer.
+
     Question: {question}
 
-    ### Response:
-    [Retrieval]<paragraph>{paragraph}</paragraph>
+    Context:
+    {context}
+
+    Answer:
   score_weights:
     relevant: 1.0
     fully_supported: 1.5
