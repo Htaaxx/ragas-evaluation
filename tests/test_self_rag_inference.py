@@ -100,6 +100,26 @@ def test_reflection_parser_scores_supported_relevant_outputs() -> None:
     assert parsed.score == 5.0
 
 
+def test_reflection_parser_removes_generated_padding_and_markup() -> None:
+    parse_self_rag_output = _generator_module().parse_self_rag_output
+
+    parsed = parse_self_rag_output(
+        (
+            "<pad>[Relevant] Private sellers are not acting as a business, "
+            "so buyers have fewer consumer protections. "
+            "[Fully supported][Utility:5]</s><pad><paragraph>ignored</paragraph>"
+        ),
+        score_weights={"relevant": 1.0, "fully_supported": 1.5, "utility": 0.5},
+    )
+
+    assert parsed.answer == (
+        "Private sellers are not acting as a business, "
+        "so buyers have fewer consumer protections."
+    )
+    assert "<pad>" not in parsed.answer
+    assert "<paragraph>" not in parsed.answer
+
+
 def test_candidate_selection_uses_reflection_score_then_retrieval_score() -> None:
     generator = _generator_module()
     GenerationCandidate = generator.GenerationCandidate

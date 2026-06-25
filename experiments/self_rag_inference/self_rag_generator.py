@@ -10,8 +10,17 @@ from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_CRITIQUE_TOKEN = re.compile(r"\[(?:Relevant|Irrelevant|Fully supported|Partially supported|No support|Utility:\d+)\]")
+_CRITIQUE_TOKEN = re.compile(
+    r"\[(?:Relevant|Irrelevant|Fully supported|Partially supported|No support|Utility:\d+)\]"
+)
 _UTILITY = re.compile(r"\[Utility:(?P<utility>\d+)\]")
+_ANSWER_TERMINATOR = re.compile(
+    r"\[(?:Fully supported|Partially supported|No support|Utility:\d+)\]"
+)
+_SPECIAL_MARKUP = re.compile(
+    r"</?s>|<pad>|<unk>|\[Retrieval\]|</?paragraph>",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -56,13 +65,14 @@ def format_self_rag_prompt(question: str, paragraph: str, prompt_template: str) 
 
 
 def _strip_special_tokens(text: str) -> str:
-    text = text.replace("</s>", " ")
-    text = text.replace("<s>", " ")
+    text = _SPECIAL_MARKUP.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def _clean_answer(raw_output: str) -> str:
     text = _strip_special_tokens(raw_output)
+    text = re.sub(r"^\[(?:Relevant|Irrelevant)\]\s*", "", text)
+    text = _ANSWER_TERMINATOR.split(text, maxsplit=1)[0]
     text = _CRITIQUE_TOKEN.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -199,7 +209,11 @@ class SelfRAGGenerator:
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer is not loaded for HF backend.")
 
-        encoded = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
+        encoded = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+        ).to(self.model.device)
         input_length = encoded["input_ids"].shape[1]
         temperature = float(self.model_cfg.get("temperature", 0.0))
         generate_kwargs = {

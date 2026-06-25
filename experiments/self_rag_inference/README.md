@@ -88,7 +88,8 @@ Important knobs:
 
 ```text
 ### Instruction:
-{question}
+Answer the question using only the retrieved passage. Give a short, direct answer.
+Question: {question}
 
 ### Response:
 [Retrieval]<paragraph>{paragraph}</paragraph>
@@ -96,3 +97,6 @@ Important knobs:
 
 - `skip_special_tokens=False` is required so reflection tokens remain visible
   for parsing and scoring.
+- Generated special markers such as `<pad>` and `<paragraph>` are stripped from
+  the final `predicted_answer`; inspect `raw_output` when debugging model
+  behavior.

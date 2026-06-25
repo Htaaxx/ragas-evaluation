@@ -37,7 +37,8 @@ generation:
   mode: "always_retrieve"
   prompt_template: |
     ### Instruction:
-    {question}
+    Answer the question using only the retrieved passage. Give a short, direct answer.
+    Question: {question}
 
     ### Response:
     [Retrieval]<paragraph>{paragraph}</paragraph>
