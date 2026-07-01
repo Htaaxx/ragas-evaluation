@@ -1,46 +1,40 @@
-# Self-RAG answer-generation inference config.
-# New pipeline only; does not replace the self_rag_verifier experiment.
+# Secondary normal RAG benchmark over MS MARCO.
 
 seed: 42
 
 model:
   name: "Qwen/Qwen2.5-7B-Instruct"
-  backend: "causal_instruct"  # causal_instruct | seq2seq | hf | vllm
+  backend: "causal_instruct"
   dtype: "half"
-  tensor_parallel_size: 2
   max_new_tokens: 160
   max_input_tokens: 2048
-  num_beams: 1
   temperature: 0.0
   top_p: 0.9
   repetition_penalty: 1.05
   load_in_4bit: true
-  download_dir: "models/self_rag"
   device_map: "auto"
   system_prompt: "You are a RAG question-answering assistant. Use the retrieved context to answer every question with a short, factual answer."
-
-hf_fallback:
-  load_in_4bit: true
-  device_map: "auto"
 
 retriever:
   encoder_model: "sentence-transformers/all-MiniLM-L6-v2"
   top_k: 3
   normalize_embeddings: true
   index_batch_size: 64
-  index_dir: "results/self_rag_inference/msmarco_faiss_index"
+  index_dir: "results/normal_rag/msmarco_faiss_index"
 
 data:
-  msmarco_csv: "data/ms-macro/msmarcro_500.csv"
+  dataset_type: "msmarco"
+  csv: "data/ms-macro/msmarcro_500.csv"
   id_column: "id"
   question_column: "question"
   context_column: "context"
-  gold_answer_column: "gold_answer"
+  answer_column: "gold_answer"
+  metadata_columns: []
   max_passage_chars: 1200
   max_samples:
+  filters: {}
 
 generation:
-  mode: "always_retrieve"
   prompt_template: |
     Answer the question using the retrieved context below. Give a short, direct answer.
 
@@ -50,13 +44,9 @@ generation:
     {context}
 
     Answer:
-  score_weights:
-    relevant: 1.0
-    fully_supported: 1.5
-    utility: 0.5
-  fallback_score: 0.0
 
 evaluation:
-  results_dir: "results/self_rag_inference"
-  predictions_csv: "msmarco_predictions.csv"
+  results_dir: "results/normal_rag/msmarco"
+  predictions_csv: "predictions.csv"
   metrics_json: "metrics.json"
+  group_fields: []

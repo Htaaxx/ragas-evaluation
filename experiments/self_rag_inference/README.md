@@ -88,8 +88,7 @@ Important knobs:
 - The default prompt is normal RAG QA:
 
 ```text
-Answer the question using only the context below. If the context does not contain
-the answer, say "I don't know." Give a short, direct answer.
+Answer the question using the retrieved context below. Give a short, direct answer.
 
 Question: {question}
 
