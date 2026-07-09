@@ -1,0 +1,46 @@
+# RAGAS-feature faithfulness filter: end-to-end config.
+#
+# Flow: labeled corpus -> RAGAS features -> train sklearn filter -> apply to
+# normal-RAG predictions. RAGAS uses an OpenAI backend; OPENAI_API_KEY is read
+# from the environment (.env supported via python-dotenv).
+
+seed: 42
+
+ragas:
+  llm_model: "gpt-4o-mini"
+  embedding_model: "text-embedding-3-small"
+  temperature: 0.0
+  batch_size: 20
+  # RAGAS metrics used as classifier features. GT-based metrics
+  # (answer_correctness/answer_similarity/context_recall) require a gold answer.
+  metrics:
+    - faithfulness
+    - answer_relevancy
+    - context_precision
+    - context_recall
+    - answer_correctness
+    - answer_similarity
+    # context_relevancy removed in ragas>=0.4; omit unless your install supports it
+
+feature_extraction:
+  labeled_csv: data/merged/labeled_merged.csv
+  max_samples:                       # null = all rows; set an int to cap cost
+  feature_path: results/ragas_filter/ragas_features.csv
+  checkpoint_path: results/ragas_filter/ragas_checkpoint.csv
+
+training:
+  model_output: models/ragas_filter
+  label_col: label
+  id_col: id
+  sort_by: f1
+  test_size: 0.2
+  random_state: 42
+  min_recall_for_threshold: 0.70
+  threshold_selection_path: results/ragas_filter/threshold_selection.json
+
+apply:
+  rag_predictions_csv: results/normal_rag/merged/predictions.csv
+  feature_path: results/ragas_filter/rag_ragas_features.csv
+  checkpoint_path: results/ragas_filter/rag_ragas_checkpoint.csv
+  filtered_csv: results/ragas_filter/predictions_filtered.csv
+  results_dir: results/ragas_filter
