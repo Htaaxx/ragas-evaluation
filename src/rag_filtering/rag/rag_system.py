@@ -20,7 +20,6 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from rag_filtering.rag.config import RAGConfig
 from rag_filtering.data.asqa_loader import ASQALoader
-from rag_filtering.evaluation.retriever_evaluator import RetrieverEvaluator
 from rag_filtering.rag.retrieval.indexer import DocumentIndexer
 from rag_filtering.rag.retrieval.qa_pipeline import QAPipeline
 from rag_filtering.rag.training.generator_trainer import GeneratorTrainer
@@ -162,6 +161,9 @@ class RAGSystem:
         logger.info("=" * 60)
         logger.info("Evaluating Retriever")
         logger.info("=" * 60)
+
+        # Lazy import to avoid an evaluation <-> rag package import cycle.
+        from rag_filtering.evaluation.retriever_evaluator import RetrieverEvaluator
 
         evaluator = RetrieverEvaluator(
             encoder=self.encoder,

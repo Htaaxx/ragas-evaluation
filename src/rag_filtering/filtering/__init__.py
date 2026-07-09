@@ -23,6 +23,9 @@ from .learned_filter import AnswerQualityClassifier, train_classifier
 from .llm_filter import AnswerFilter, AnswerScoreResult
 from .metrics import AnswerMetricBundle
 from .nli_filter import NLIAnswerFilter
+from .ragas_feature_extractor import RagasFeatureExtractor, build_ragas_features
+from .ragas_filter import RagasFilter, run_ragas_filter
+from .ragas_filter_trainer import RagasFilterTrainer, train_ragas_filter
 from .reward_filter import (
     AnswerRewardComputer,
     AnswerRewardFilter,
@@ -35,6 +38,13 @@ __all__ = [
     "train_classifier",
     # NLI zero-shot filter
     "NLIAnswerFilter",
+    # RAGAS-feature filter (feature extractor -> trainer -> filter)
+    "RagasFeatureExtractor",
+    "build_ragas_features",
+    "RagasFilterTrainer",
+    "train_ragas_filter",
+    "RagasFilter",
+    "run_ragas_filter",
     # Ensemble filter
     "EnsembleFilter",
     "FilterDecision",

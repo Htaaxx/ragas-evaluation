@@ -10,10 +10,13 @@ from .ragas_evaluator import (
     compare_rag_systems,
     evaluate_rag_pipeline,
 )
+from .ragas_wrapper import RAGAS, SelfEvaluationResult
 
 __all__ = [
     "RetrieverEvaluator",
     "RAGASEvaluator",
     "evaluate_rag_pipeline",
     "compare_rag_systems",
+    "RAGAS",
+    "SelfEvaluationResult",
 ]
