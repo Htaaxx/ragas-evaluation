@@ -64,6 +64,10 @@ data/hotpot_qa/*.csv
 .env
 .env.local
 
+# Kaggle local sync (outputs can be large; credentials never belong in git)
+results/kaggle_runs/
+notebooks/kaggle_pulled/
+
 # Logs
 *.log
 logs/

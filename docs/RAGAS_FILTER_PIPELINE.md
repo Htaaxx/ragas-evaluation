@@ -225,7 +225,60 @@ notebooks/09_ragas_filter_pipeline_demo.ipynb
 
 ---
 
-## 10. Troubleshooting
+## 10. Kaggle sync from Cursor (recommended)
+
+Keep editing code in this repo. Use Kaggle only as a GPU runner, then pull
+outputs back with the CLI.
+
+### One-time setup
+
+1. Create an API token on Kaggle (**Account → Settings → API**).
+2. Save it locally (Windows):
+
+```powershell
+mkdir $env:USERPROFILE\.kaggle
+# paste token into:
+#   C:\Users\<you>\.kaggle\access_token
+```
+
+3. Install the CLI in the project venv:
+
+```powershell
+pip install kaggle
+```
+
+### Sync helpers
+
+```powershell
+# List your kernels
+python scripts/kaggle_sync.py list
+
+# Pull outputs after a Kaggle run
+python scripts/kaggle_sync.py pull-output htaaxx/<kernel-slug>
+
+# Pull outputs AND install predictions.csv where Stage 09 expects it
+python scripts/kaggle_sync.py pull-output htaaxx/<kernel-slug> --install-predictions
+
+# Pull notebook edits made on the website back into the repo
+python scripts/kaggle_sync.py pull-notebook htaaxx/<kernel-slug>
+```
+
+Then run the filter locally (no GPU required if predictions already exist):
+
+```powershell
+python scripts/run_ragas_pipeline.py --train-limit 20 --apply-limit 20
+```
+
+Typical split:
+
+| Work | Where |
+|------|--------|
+| Edit code / commits | Cursor |
+| Normal RAG (Qwen) | Kaggle GPU |
+| Pull `predictions.csv` | `scripts/kaggle_sync.py` |
+| RAGAS filter | Local Cursor |
+
+## 11. Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
