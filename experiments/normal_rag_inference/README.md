@@ -26,23 +26,10 @@ results/normal_rag/merged/predictions.csv
 results/normal_rag/merged/metrics.json
 ```
 
-## Secondary MS MARCO Run
-
-```bash
-python experiments/normal_rag_inference/run_inference.py \
-  --config configs/experiments/normal_rag_msmarco.yaml
-```
-
-Outputs:
-
-```text
-results/normal_rag/msmarco/predictions.csv
-results/normal_rag/msmarco/metrics.json
-```
-
 ## Kaggle T4 x2
 
-Use `notebooks/08_normal_rag_inference_kaggle.ipynb`.
+Use `notebooks/08_normal_rag_inference_kaggle.ipynb` (**merged-only** on
+`final-filtering-pipeline`; MS MARCO config was removed).
 
 Recommended Kaggle settings:
 
