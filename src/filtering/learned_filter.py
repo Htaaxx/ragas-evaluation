@@ -602,12 +602,17 @@ def _log_head_init_stats(model) -> None:
     """Log the freshly-initialized classifier head stats (sanity on reinit)."""
     for name, p in model.named_parameters():
         if name.startswith("classifier"):
-            logger.info(
-                "NaN-DIAG: init '%s' shape=%s mean=%.4e std=%.4e max|.|=%.4e "
-                "finite=%s",
-                name, tuple(p.shape), float(p.mean()), float(p.std()),
-                float(p.abs().max()), bool(torch.isfinite(p).all()),
-            )
+            with torch.no_grad():
+                logger.info(
+                    "NaN-DIAG: init '%s' shape=%s mean=%.4e std=%.4e max|.|=%.4e "
+                    "finite=%s",
+                    name,
+                    tuple(p.shape),
+                    float(p.detach().mean()),
+                    float(p.detach().std()),
+                    float(p.detach().abs().max()),
+                    bool(torch.isfinite(p).all()),
+                )
 
 
 # ---------------------------------------------------------------------------
