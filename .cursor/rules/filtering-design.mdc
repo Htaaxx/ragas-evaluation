@@ -1,0 +1,63 @@
+---
+description: Filtering layer design rules - core thesis focus
+globs: "**/filtering/**"
+alwaysApply: false
+---
+
+# Filtering Layer Design (Core Thesis Focus)
+
+The filtering layer is an **answer quality gate** that operates AFTER generation.
+It takes (question, answer) and returns accept/reject. No ground truth or context
+is needed at inference time. This is a black-box answer-only approach.
+
+## Module Structure
+
+```
+/src/filtering/
+  __init__.py            # Public API exports
+  data_models.py         # AnswerReward, FilterDiagnostics, FilterDecision
+  data_split.py          # load_and_split() for labeled_asqa.csv
+  learned_filter.py      # AnswerQualityClassifier + train_classifier()
+  filter_evaluator.py    # FilterEvaluator + FilterResult
+  metrics.py             # AnswerMetricBundle (existing, kept for analysis)
+  llm_filter.py          # AnswerFilter (existing, kept for LLM-as-judge)
+  reward_filter.py       # AnswerRewardFilter (existing, kept for retry logic)
+  weight_fitting.py      # WeightBank/WeightFitter (existing, kept)
+```
+
+## Rules
+
+- The primary filter is `AnswerQualityClassifier` (fine-tuned DeBERTa-v3-small)
+- Filter interface: `predict(question, answer) -> FilterDecision`
+- `FilterDecision` contains: `accept: bool`, `confidence: float`, `reasoning: str`
+- NEVER hardcode thresholds -> load from `/src/configs/filtering.yaml`
+- All filter parameters (model_path, threshold, max_length) must come from config
+- Log every filter decision for post-hoc analysis
+
+```python
+# BAD - hardcoded, no structured output
+def filter(question, answer):
+    return len(answer) > 50  # arbitrary
+
+# GOOD - config-driven, structured output
+class AnswerQualityClassifier:
+    def __init__(self, model_path: str, threshold: float = 0.5):
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        self.threshold = threshold
+
+    def predict(self, question: str, answer: str) -> FilterDecision:
+        prob = self._compute_probability(question, answer)
+        return FilterDecision(
+            accept=prob >= self.threshold,
+            confidence=prob,
+            reasoning=f"P(correct)={prob:.3f}",
+        )
+```
+
+## Training Rules
+
+- Train on `labeled_asqa.csv` (8,706 samples: 4,353 correct + 4,353 hallucinated)
+- Split by base question ID to prevent data leakage
+- Monitor validation F1, use early stopping
+- Save best checkpoint to `models/answer_filter/`
+- Never evaluate on training data -- always use held-out test set

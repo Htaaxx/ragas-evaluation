@@ -1,0 +1,37 @@
+---
+description: RAG thesis repository structure and organization rules
+alwaysApply: true
+---
+
+# Repository Structure
+
+Organize code by **pipeline stage**, matching the actual codebase.
+
+```
+/src
+  /data              # Dataset loaders (ASQALoader, HotpotQALoader)
+  /retrieval         # QAPipeline, DocumentIndexer (FAISS)
+  /training          # Retriever and generator training
+  /filtering         # Answer quality filtering (CORE THESIS FOCUS)
+  /evaluation        # RAGAS evaluator, retriever evaluator
+  /configs           # YAML configuration files
+  /utils             # Model cache, shared helpers
+/data
+  /asqa              # ASQA dataset files (train.csv, dev.csv, labeled_asqa.csv)
+/models              # Saved model checkpoints (e.g., models/answer_filter/)
+/results             # Experiment outputs (predictions CSV, metrics JSON)
+/notebooks           # Exploration, training, and analysis notebooks
+/tests               # Unit tests mirroring /src structure
+```
+
+## Pipeline Flow
+
+```
+retrieve → generate → filter (answer quality) → accept/reject
+```
+
+- Filtering operates AFTER generation, on (question, answer) pairs
+- Each stage is independent, testable, and replaceable
+- Filtering logic lives ONLY in `/src/filtering/`
+- Reusable logic goes in `/src/`, never in notebooks
+- Experimental code and visualizations go in `/notebooks/`

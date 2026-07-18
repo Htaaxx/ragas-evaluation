@@ -1,0 +1,48 @@
+---
+description: Evaluation metrics and experiment tracking standards
+globs: "**/evaluation/**,**/filtering/filter_evaluator*"
+alwaysApply: false
+---
+
+# Evaluation Standards
+
+## Filtering Metrics (Required for Thesis)
+
+Every filter evaluation must report ALL of these on the held-out test set:
+
+- **Precision** = TP / (TP + FP) -- "Of accepted answers, what fraction are correct?"
+- **Recall** = TP / (TP + FN) -- "Of all correct answers, what fraction are accepted?"
+- **F1** = harmonic mean of Precision and Recall
+- **Accuracy** = (TP + TN) / N
+- **Rejection Recall** = TN / (TN + FP) -- "Of all bad answers, what fraction are caught?"
+- **Rejection Rate** = (TN + FN) / N -- "What fraction of answers are filtered out?"
+
+Where:
+- TP = correct answer (label=1) accepted
+- TN = hallucinated answer (label=0) rejected
+- FP = hallucinated answer (label=0) accepted (dangerous)
+- FN = correct answer (label=1) rejected
+
+## Comparison Baseline
+
+Always compare against the **No Filter** baseline:
+- Precision = 50% (balanced data), Recall = 100%, F1 = 66.7%, Accuracy = 50%
+
+## Results Storage
+
+- Save metrics to `/results/` as JSON with timestamp and config snapshot
+- Save predictions (per-sample accept/reject + confidence) to CSV
+- Include precision-recall curve data for threshold analysis
+
+## Experiment Rules
+
+- NEVER evaluate on training data
+- NEVER mix train/val/test splits
+- Always report the threshold used
+- Always include error analysis: which hallucination types are caught vs. missed
+- Log: model checkpoint, threshold, all metrics, split sizes
+
+## Retrieval Metrics (Secondary, Existing)
+
+For retrieval evaluation (not the thesis focus): Recall@K, Precision@K, MRR.
+These live in `src/evaluation/retriever_evaluator.py` and are not modified.

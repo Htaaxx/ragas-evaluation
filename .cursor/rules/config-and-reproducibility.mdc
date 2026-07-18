@@ -1,0 +1,53 @@
+---
+description: Configuration management and reproducibility standards
+globs: "**/configs/**,**/*.yaml,**/*.json"
+alwaysApply: false
+---
+
+# Configuration & Reproducibility
+
+## Configuration Management
+
+- Use YAML configs for thresholds, models, and parameters
+- No hardcoding. Every tunable value comes from config files.
+- Store configs in `/src/configs/`
+
+```yaml
+# src/configs/filtering.yaml
+answer_filter:
+  model_name: "gemini-2.5-flash"
+  threshold: 6.0
+  max_concurrent: 10
+
+reward_filter:
+  correctness_threshold: 0.50
+  max_retries: 3
+  dataset_type: "universal"
+
+learned_filter:
+  model_name: "microsoft/deberta-v3-small"
+  model_path: "models/answer_filter"
+  threshold: 0.5
+  max_length: 512
+  batch_size: 16
+  num_epochs: 3
+  learning_rate: 2e-5
+```
+
+```python
+# BAD
+threshold = 0.5  # hardcoded
+
+# GOOD
+from src.configs import load_config
+config = load_config("filtering")
+threshold = config["learned_filter"]["threshold"]
+```
+
+## Reproducibility
+
+- Fix random seeds in every script, notebook, and data split (seed=42)
+- Save configs alongside results
+- Track dataset versions: always note which split of labeled_asqa.csv was used
+- Cache model checkpoints to `models/` with descriptive names
+- Log training args, epoch metrics, and final test results to JSON

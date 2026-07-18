@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Models and data (large files)
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
+*.ckpt
+
+# Outputs
+rag_output/
+examples_output/
+vectorstore/
+*.faiss
+*.pkl
+
+# Data (optional - uncomment if you don't want to track data)
+# data/
+
+# Large training data files
+data/hotpot_qa/train.csv
+data/hotpot_qa/valid.csv
+data/hotpot_qa/*.csv
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
