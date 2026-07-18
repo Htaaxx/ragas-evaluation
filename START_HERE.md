@@ -1,403 +1,94 @@
-# 🎯 Complete RAGAS Filter System - Final Summary
+# Start here — thesis filtering pipeline
 
-## What You Have
+This repo studies **whether a RAG answer is faithful to its retrieved context**. Work through notebooks in order, then run the DeBERTa baseline for thesis comparison tables.
 
-### 2 Production-Ready Classes
+## 1. Environment
 
-```
-src/filtering/ragas_filter.py (630 lines)
-├── RagasFilter
-│   ├── load_data()
-│   ├── extract_contexts()
-│   ├── compute_ragas_features()
-│   ├── train_models()
-│   ├── save_model()
-│   ├── get_feature_importance()
-│   └── train() ← ONE METHOD FOR EVERYTHING
-│
-└── FilterEvaluator
-    ├── load_model()
-    ├── predict()
-    ├── save_predictions()
-    └── evaluate_classification()
+```bash
+cd ragas-evaluation
+python -m venv venv
+venv\Scripts\activate          # Windows
+pip install -r requirements.txt
+# For DeBERTa training on NVIDIA GPU:
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
----
+Add API keys to `.env` if you will run RAGAS LLM metrics or the LLM-judge notebook.
 
-## 3 Ways to Use
+## 2. Data you already have
 
-### Way 1: One-Line Training (SIMPLEST)
-```python
-from src.filtering import RagasFilter
-from src.evaluation.ragas_evaluator import RAGASEvaluator
+| File | Use |
+|------|-----|
+| `data/labeled_merged.csv` | Full labeled corpus (train/val/test source) |
+| `data/labeled_merged_test.csv` | Frozen holdout from base-ID split (`test_size=0.2`, `seed=42`) |
+| `data/asqa/`, `data/ms-marco/`, `data/wikiEval/` | Per-dataset sources |
 
-filter = RagasFilter()
-evaluator = RAGASEvaluator(...)
+Hallucinated rows use ids like `asqa_0_hallu`. Splitting always groups by base id so correct and hallu twins stay in the same fold.
 
-# This one line does EVERYTHING
-results = filter.train("data/labeled.csv", evaluator)
+## 3. Recommended path
+
+### A. Explore data and RAGAS filter (primary method)
+
+1. `notebooks/0_data_collection.ipynb`
+2. `notebooks/1_synthetic-data.ipynb`
+3. `notebooks/2_rag-asqa-baseline.ipynb`
+4. `notebooks/3.1_ragas-feature-extraction.ipynb`
+5. `notebooks/3.2_filter-training.ipynb`
+6. `notebooks/4_llm-judge-filter.ipynb` (optional baseline)
+
+Existing RAGAS outputs live under `results/ragas_filter/`.
+
+### B. DeBERTa / NLI baseline (thesis baseline)
+
+Interactive:
+
+1. Open `notebooks/5_deberta_nli_baseline.ipynb`
+2. Run setup + split + gates
+3. Set `RUN_TRAINING = True` **or** run the headless script below
+
+Headless (preferred for the 3-run protocol):
+
+```bash
+python scripts/run_deberta_nli_baseline.py --config configs/experiments/filter_training.yaml
 ```
 
-### Way 2: Step-by-Step Training (FLEXIBLE)
-```python
-filter = RagasFilter()
-filter.load_data("data/labeled.csv")
-filter.extract_contexts()
-filter.compute_ragas_features(evaluator)
-filter.train_models()
-filter.save_model()
-filter.get_feature_importance()
+This will:
+
+1. Rebuild the leakage-safe split and refresh `data/labeled_merged_test.csv`
+2. Run the overfit sanity gate (must reach train F1 ≥ 0.95)
+3. Train DeBERTa three times → `models/answer_filter/run_{1,2,3}/`
+4. Pick min-FPR thresholds on val (recall ≥ 0.70)
+5. Evaluate on the frozen test set
+6. Run zero-shot NLI once
+7. Write `results/deberta_nli/summary.json` with mean±std
+
+Resume evaluation only (checkpoints already trained):
+
+```bash
+python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 ```
 
-### Way 3: Training + Evaluation (COMPLETE)
-```python
-# Train
-filter = RagasFilter()
-results = filter.train("data/labeled.csv", evaluator)
+## 4. What “good” looks like
 
-# Evaluate
-from src.filtering import FilterEvaluator
-eval = FilterEvaluator()
-eval.load_model()
-predictions = eval.predict(test_ragas, test_data)
-eval.save_predictions()
-metrics = eval.evaluate_classification(test_labels)
+- Filter framing is always `(context, answer)`, not `(question, answer)`.
+- Final decisions use the **validation-selected threshold**, never argmax@0.5.
+- Comparison tables include **No Filter**, **NLI zero-shot**, and **DeBERTa (mean±std)**.
+- Keep `fp16: false` for DeBERTa-v3.
+
+## 5. Quick smoke tests
+
+```bash
+python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
 ```
 
----
+## 6. Where logic lives
 
-## Complete Example
+Notebooks are thin. Core code is under `src/filtering/`:
 
-```python
-from src.filtering import RagasFilter, FilterEvaluator
-from src.evaluation.ragas_evaluator import RAGASEvaluator
-import pandas as pd
+- `learned_filter.py` — DeBERTa train / infer
+- `nli_filter.py` — zero-shot NLI
+- `data_split.py` — base-ID split + test CSV export
+- `deberta_filter_evaluator.py` — metrics + `select_threshold_min_fpr`
+- `ragas_*.py` — RAGAS-feature filter stack
 
-# ============================================================
-# TRAINING
-# ============================================================
-
-# 1. Setup
-filter_pipeline = RagasFilter(
-    output_dir="results/ragas_filter",
-    model_dir="models/ragas_filter",
-)
-
-ragas_evaluator = RAGASEvaluator(
-    metrics=["faithfulness", "answer_relevancy", "context_relevancy"],
-    llm_model="gpt-4o-mini",
-    embedding_model="text-embedding-3-small",
-)
-
-# 2. Train (ONE LINE!)
-print("=" * 80)
-print("PHASE 1: TRAINING")
-print("=" * 80)
-
-training_results = filter_pipeline.train(
-    csv_path="data/asqa/labeled_asqa.csv",
-    ragas_evaluator=ragas_evaluator,
-)
-
-print(f"\n✓ Training Complete!")
-print(f"  Best model: {training_results['best_model']}")
-print(f"  Model saved: {training_results['model_path']}")
-
-# ============================================================
-# EVALUATION
-# ============================================================
-
-print("\n" + "=" * 80)
-print("PHASE 2: EVALUATION")
-print("=" * 80)
-
-# 3. Load test data
-test_data = pd.read_csv("data/asqa/test_sample.csv")
-
-# 4. Compute RAGAS metrics for test data
-print("\nComputing RAGAS metrics for test data...")
-test_ragas = ragas_evaluator.evaluate(
-    questions=test_data["question"].tolist(),
-    answers=test_data["answer"].tolist(),
-    contexts=test_data["ragas_contexts"].tolist(),
-).to_pandas()
-
-# Keep only RAGAS metrics
-test_ragas = test_ragas[[
-    "faithfulness", "answer_relevancy", "context_relevancy"
-]]
-
-# 5. Apply filter
-filter_eval = FilterEvaluator(
-    model_dir="models/ragas_filter",
-    output_dir="results/ragas_filter/evaluation",
-)
-
-print("\nApplying filter...")
-predictions = filter_eval.predict(
-    ragas_df=test_ragas,
-    data_df=test_data,
-)
-
-# 6. Save predictions
-filter_eval.save_predictions()
-
-# 7. Evaluate
-if "label" in test_data.columns:
-    print("\nEvaluating performance...")
-    metrics = filter_eval.evaluate_classification(
-        y_true=test_data["label"].values
-    )
-    
-    print(f"\n✓ Evaluation Complete!")
-    print(f"  Accuracy: {metrics['accuracy']:.4f}")
-    print(f"  F1 Score: {metrics['f1']:.4f}")
-    print(f"  ROC-AUC: {metrics['roc_auc']:.4f}")
-```
-
----
-
-## Key Metrics
-
-### Models Compared
-1. Logistic Regression
-2. Random Forest (400 trees)
-3. Gradient Boosting ← Usually wins
-4. HistGradient Boosting
-5. Extra Trees (500 trees)
-6. XGBoost
-
-### Selection Criteria
-1. F1 Score (primary)
-2. Accuracy (secondary)
-3. ROC-AUC (tertiary)
-
-### Expected Results
-- Accuracy: ~90%
-- F1: ~0.90
-- ROC-AUC: ~0.96
-
----
-
-## Output Structure
-
-### After `filter.train()`
-```
-results/ragas_filter/
-├── ragas_features.csv           # Features (id, label, faithfulness, ...)
-├── model_comparison.csv         # All 6 models' metrics
-├── feature_importance.csv       # Importance scores
-└── ragas_checkpoints.csv        # Checkpoint for resume
-
-models/ragas_filter/
-└── gradient_boosting.joblib     # Serialized best model
-```
-
-### After `evaluator.predict()` + `save_predictions()`
-```
-results/ragas_filter/evaluation/
-└── filtered_predictions.csv     # Predictions with confidence scores
-```
-
----
-
-## Feature Importance
-
-What RAGAS metrics matter most?
-
-```
-Faithfulness       89% ████████████████████
-Context Relevancy  10% ██
-Answer Relevancy    1% 
-```
-
-(Specific values vary by dataset)
-
----
-
-## Integration with Codebase
-
-### Module Exports
-```python
-from src.filtering import (
-    RagasFilter,              # NEW: Training pipeline
-    FilterEvaluator,          # NEW: Inference & evaluation
-    # ... other filters ...
-)
-```
-
-### Standalone Usage
-```python
-from src.filtering.ragas_filter import RagasFilter, FilterEvaluator
-```
-
----
-
-## Files Created
-
-| File | Purpose | Size |
-|------|---------|------|
-| `src/filtering/ragas_filter.py` | Main implementation | 630 lines |
-| `RAGAS_FILTER_GUIDE.md` | Complete API guide | 11 KB |
-| `RAGAS_FILTER_SUMMARY.md` | Quick summary | 7.8 KB |
-
----
-
-## Quick Cheatsheet
-
-### Train
-```python
-filter = RagasFilter()
-results = filter.train(csv_path, ragas_evaluator)
-```
-
-### Load & Predict
-```python
-evaluator = FilterEvaluator()
-evaluator.load_model()
-predictions = evaluator.predict(ragas_df, data_df)
-```
-
-### Evaluate
-```python
-metrics = evaluator.evaluate_classification(y_true)
-print(f"F1: {metrics['f1']:.4f}")
-```
-
----
-
-## Performance Guide
-
-| Dataset Size | Training Time | Notes |
-|--------------|---------------|-------|
-| 1,000 samples | 1-2 min | Quick |
-| 8,706 samples | 5-10 min | Typical |
-| 50,000+ | 30+ min | Slow, use batch processing |
-
-RAGAS metrics dominate the time (depends on OpenAI API).
-
----
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `ImportError: ragas_filter` | Install: `pip install -r requirements.txt` |
-| `FileNotFoundError` | Check CSV path & columns (id, question, answer, context, supporting_facts, label) |
-| `No model found` | Train first: `filter.train()` |
-| `Out of memory` | Reduce batch_size in RAGAS evaluator |
-| `API rate limits` | Wait or use smaller batch_size |
-
----
-
-## Next Steps
-
-1. **Read** → `RAGAS_FILTER_GUIDE.md` (complete API)
-2. **Run** → Execute `filter.train()` one-liner
-3. **Check** → Review `results/ragas_filter/` outputs
-4. **Evaluate** → Use FilterEvaluator on new data
-5. **Deploy** → Load model in production
-
----
-
-## Recommended Usage
-
-### For Quick Start
-```python
-# Simple one-liner
-results = filter.train(csv_path, ragas_evaluator)
-```
-
-### For Production
-```python
-# Step-by-step for control
-filter.load_data(csv_path)
-filter.extract_contexts()
-filter.compute_ragas_features(evaluator)
-filter.train_models()
-filter.save_model()
-```
-
-### For Inference
-```python
-# Load & apply
-evaluator = FilterEvaluator()
-evaluator.load_model()
-predictions = evaluator.predict(test_ragas, test_data)
-evaluator.save_predictions()
-```
-
----
-
-## Documentation Hierarchy
-
-1. **THIS FILE** → Overview & examples
-2. `RAGAS_FILTER_GUIDE.md` → Complete API reference
-3. `src/filtering/ragas_filter.py` → Implementation
-
----
-
-## Quality Checklist
-
-- [x] RagasFilter class implemented
-- [x] FilterEvaluator class implemented
-- [x] Data loading & validation
-- [x] RAGAS metrics computation
-- [x] 6 classifiers comparison
-- [x] Auto model selection
-- [x] Feature importance extraction
-- [x] Model persistence (joblib)
-- [x] Inference with confidence scores
-- [x] Classification evaluation
-- [x] Error handling
-- [x] Progress tracking
-- [x] Type hints throughout
-- [x] Full docstrings
-- [x] Integration with module
-- [x] Comprehensive documentation
-
----
-
-## Architecture
-
-```
-User Code
-   ↓
-RagasFilter (Training)
-├─ Load Data
-├─ Extract Contexts
-├─ Compute RAGAS
-├─ Train 6 Models
-├─ Select Best
-└─ Save Model
-   ↓
-FilterEvaluator (Inference)
-├─ Load Model
-├─ Apply to New Data
-├─ Generate Predictions
-└─ Evaluate Performance
-   ↓
-CSV Results
-```
-
----
-
-## Status
-
-✅ **COMPLETE & PRODUCTION READY**
-
-- RagasFilter: Fully functional
-- FilterEvaluator: Fully functional
-- Integration: Complete
-- Documentation: Comprehensive
-- Testing: Validated
-- Performance: Optimized
-
----
-
-**Version**: 2.0  
-**Date**: May 2026  
-**Status**: Production Ready  
-**Quality**: Enterprise Grade
-
-**Recommendation**: Start with the one-liner `filter.train()` for simplicity!
+See the root `README.md` for the full thesis overview.

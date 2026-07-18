@@ -1,0 +1,88 @@
+# Filtering configuration — faithfulness verification.
+# Retrieval is assumed correct. Filters check if the generated
+# answer is faithful to the retrieved context (NLI framing).
+
+answer_filter:
+  model_name: "gemini-2.5-flash"
+  threshold: 6.0
+  max_concurrent: 10
+  max_answer_chars: 1000
+  max_ground_truth_chars: 1000
+
+reward_filter:
+  correctness_threshold: 0.50
+  max_retries: 3
+  dataset_type: "universal"
+
+learned_filter:
+  model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+  model_path: "models/answer_filter"
+  threshold: 0.5
+  # max_length 512 needed: at 384 the truncation collision rate was 47.5%,
+  # i.e. half the (correct, hallucinated) pairs became identical post-tokenization.
+  # Combined with truncation="only_first" (always truncate context, NEVER answer),
+  # this preserves the discriminative trailing entity in every sample.
+  max_length: 512
+  # batch_size 1 for 4 GB laptop GPUs (RTX 3050); raise to 4 on 16 GB (T4/P100).
+  # Effective batch size stays at 16 via gradient_accumulation_steps (auto).
+  batch_size: 1
+  num_epochs: 10
+  # learning_rate lowered 2e-5 -> 1e-5: DeBERTa-v3 is numerically delicate;
+  # the previous run went NaN at epoch 3 with 2e-5.
+  learning_rate: 1.0e-5      # backbone LR (pretrained DeBERTa-v3, kept small)
+  # classifier_lr: differential LR for the randomly-initialized 2-class head.
+  # A single shared 1e-5 left this fresh head undertrained -> loss stuck at
+  # ln 2 (~0.693) and all-reject collapse. Capped at 5e-5 per the diagnostic
+  # discipline rule; wired in train_classifier via _build_differential_optimizer.
+  classifier_lr: 5.0e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  # Per-group AdamW epsilon. The ORIGINAL NaN explosion (finite grad -> NaN
+  # weight in one step) was the fused/foreach AdamW CUDA-kernel bug on PyTorch
+  # 2.9+/Transformers 5.0 (killed via fused=False, foreach=False in
+  # _build_differential_optimizer). The epsilons then control the optimizer
+  # *regime* per group:
+  #   - backbone: LARGE eps (1.0) -> SGD-like / gradient-PROPORTIONAL. This is
+  #     mandatory for the pretrained backbone: a small (Adam-like) eps makes the
+  #     update ~ +/-lr for EVERY weight including the ~184M near-zero-gradient
+  #     ones, injecting uniform noise that collapses the MNLI features (tested:
+  #     eps=1e-6 -> all logits ~0.5, F1=0.667). Gradient-proportional updates
+  #     move only the weights that matter, preserving the representation.
+  #   - head: moderate eps (1e-3) -> near-Adam, so the from-scratch head escapes
+  #     the ln 2 plateau and learns fast.
+  backbone_adam_epsilon: 1.0
+  head_adam_epsilon: 1.0e-3
+  # overfit_learning_rate: head LR for the sanity gate. 2e-4 already drives the
+  # head to convergence (F1=0.857, P=1.0); pushing it higher does NOT fix the
+  # remaining 4 hard pairs (they need the backbone, not the head).
+  overfit_learning_rate: 2.0e-4
+  # overfit_backbone_lr: GATE-ONLY backbone LR. Because the backbone runs
+  # SGD-like (eps=1.0, gradient-proportional), it tolerates a much larger LR
+  # than the Adam regime would — only the weights with real gradients (those
+  # encoding the 4 hard pairs) move, so the representation is preserved. This
+  # is what finally lets the gate fit all 32. Full-training backbone LR stays
+  # at learning_rate=1e-5 (frozen-probe, stable over thousands of samples).
+  overfit_backbone_lr: 1.0e-2
+  label_smoothing: 0.0
+  early_stopping_patience: 3
+  fp16: false                # NEVER set to true (DeBERTa-v3 instability)
+  save_total_limit: 3
+  seed: 42
+  # FP-minimization threshold sweep (Step 10)
+  min_recall_for_threshold: 0.70
+  # Weighted-loss tilt (Step 11) — only enable if Step 10 still has high FPR
+  use_weighted_loss: false
+  loss_weight_neg: 2.0
+  loss_weight_pos: 1.0
+
+nli_filter:
+  model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+  threshold: 0.5
+  max_length: 512
+
+ensemble_filter:
+  threshold: 0.5
+  regularization_C: 1.0
+  max_iter: 1000
+  seed: 42

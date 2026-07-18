@@ -1,410 +1,138 @@
-# RAG Training System
+# Answer Faithfulness Filtering for RAG
 
-A complete system for **training and fine-tuning your own RAG (Retrieval-Augmented Generation) models** from scratch, rather than using pre-trained models.
+Thesis codebase for **post-generation answer quality filtering** in Retrieval-Augmented Generation (RAG). Retrieval is assumed correct; the filter decides whether a generated answer is **faithful** to the retrieved context (NLI framing: premise = context, hypothesis = answer).
 
-## 🎯 Overview
+**North-star metric:** minimize false-positive rate (accepting hallucinations) subject to recall ≥ 0.70 on correct answers.
 
-This project provides a comprehensive framework for:
+## Pipeline
 
-- **Training custom retriever models** using contrastive learning on question-passage pairs
-- **Fine-tuning generator models** (T5, FLAN-T5) with retrieved contexts
-- **Building efficient FAISS indices** for fast similarity search
-- **End-to-end question answering** with trained models
-- **Automatic model caching** to avoid repeated downloads
-
-### Key Difference from Traditional RAG
-
-- **Traditional RAG**: Uses pre-trained models with retrieval (off-the-shelf)
-- **This System**: Trains/fine-tunes models specifically for your RAG task
-
-## 📋 Features
-
-✅ **Retriever Training**
-- Contrastive learning with in-batch negatives
-- Support for sentence-transformers models
-- Early stopping and model checkpointing
-- Mixed precision training (FP16)
-
-✅ **Generator Training**
-- Seq2seq fine-tuning with retrieved contexts
-- Support for T5/FLAN-T5 models
-- Gradient accumulation for large batches
-- Learning rate scheduling with warmup
-
-✅ **Efficient Indexing**
-- FAISS vector index for fast retrieval
-- Batch encoding for large corpora
-- Save/load functionality
-
-✅ **Model Caching**
-- Automatic HuggingFace model download
-- Local caching to avoid re-downloads
-- Organized storage structure
-
-✅ **Evaluation**
-- Recall@K, Precision@K, MRR metrics
-- Corpus embedding caching
-- Comprehensive evaluation reports
-
-## 🏗️ Project Structure
-
+```text
+retrieve → generate → filter (context, answer) → accept / reject
 ```
+
+Two complementary filter families are implemented:
+
+| Method | Role | Notebook / script |
+|--------|------|-------------------|
+| **DeBERTa / NLI** | Thesis **baseline** — fine-tuned DeBERTa binary classifier + zero-shot NLI | `notebooks/5_deberta_nli_baseline.ipynb`, `scripts/run_deberta_nli_baseline.py` |
+| **RAGAS-feature filter** | Primary method — black-box RAGAS metrics → sklearn classifiers | `notebooks/3.1_*`, `3.2_*` |
+| **LLM-as-judge** | Additional baseline | `notebooks/4_llm-judge-filter.ipynb` |
+
+## Repository layout
+
+```text
 ragas-evaluation/
-├── src/                          # Source code
-│   ├── config.py                # Configuration management
-│   ├── rag_system.py            # Main RAG system class
-│   ├── data/                    # Data loading
-│   │   ├── __init__.py
-│   │   └── loader.py            # HotpotQA data loader
-│   ├── training/                # Training modules
-│   │   ├── __init__.py
-│   │   ├── retriever_trainer.py # Retriever training
-│   │   └── generator_trainer.py # Generator training
-│   ├── retrieval/               # Retrieval & QA
-│   │   ├── __init__.py
-│   │   ├── indexer.py           # FAISS indexing
-│   │   └── qa_pipeline.py       # QA pipeline
-│   ├── evaluation/              # Evaluation
-│   │   ├── __init__.py
-│   │   └── retriever_evaluator.py
-│   └── utils/                   # Utilities
-│       ├── __init__.py
-│       └── model_cache.py       # Model caching
-├── examples/                     # Example scripts
-│   ├── basic_qa.py              # Basic QA without training
-│   ├── train_retriever.py       # Retriever training example
-│   └── end_to_end.py            # Full pipeline example
-├── data/                         # Data directory
-│   └── hotpot_qa/
-│       ├── train.csv
-│       └── valid.csv
-├── train.py                      # Main training script
-├── requirements.txt              # Dependencies
-├── README.md                     # This file
-└── ARCHITECTURE.md              # Detailed architecture docs
+├── configs/
+│   ├── filtering/deberta_filter.yaml      # DeBERTa / NLI hyperparams
+│   └── experiments/filter_training.yaml # split paths, seeds, n_runs
+├── data/
+│   ├── labeled_merged.csv               # ASQA + MS MARCO + WikiEval labels
+│   └── labeled_merged_test.csv          # frozen holdout (base-ID split, seed=42)
+├── notebooks/
+│   ├── 0_data_collection.ipynb
+│   ├── 1_synthetic-data.ipynb
+│   ├── 2_rag-asqa-baseline.ipynb
+│   ├── 3.1_ragas-feature-extraction.ipynb
+│   ├── 3.2_filter-training.ipynb
+│   ├── 4_llm-judge-filter.ipynb
+│   └── 5_deberta_nli_baseline.ipynb     # DeBERTa/NLI baseline (×3 runs)
+├── scripts/
+│   ├── run_deberta_nli_baseline.py      # headless DeBERTa ×3 + NLI
+│   ├── train_filter.py / evaluate_filter.py
+│   └── run_filter_on_rag.py
+├── src/
+│   ├── filtering/                       # core library
+│   │   ├── learned_filter.py            # AnswerQualityClassifier + train_classifier
+│   │   ├── nli_filter.py                # NLIAnswerFilter
+│   │   ├── data_split.py                # leakage-safe base-ID split
+│   │   ├── deberta_filter_evaluator.py  # min-FPR threshold + metrics
+│   │   ├── ragas_*.py                   # RAGAS-feature pipeline
+│   │   └── llm_judge_filter.py
+│   ├── evaluation/                      # shared evaluators / plots
+│   └── utils/
+├── models/answer_filter/run_{1,2,3}/    # DeBERTa checkpoints
+└── results/deberta_nli/                 # thresholds, per-run metrics, summary.json
 ```
 
-## 🚀 Quick Start
-
-### 1. Installation
+## Setup
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd ragas-evaluation
-
-# Create virtual environment (recommended)
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Windows:
+venv\Scripts\activate
+# Linux/macOS:
+# source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
+# GPU training (recommended for DeBERTa):
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
-### 2. Prepare Data
+Copy `.env` with any LLM API keys needed for RAGAS / LLM-judge notebooks.
 
-The system expects HotpotQA data in CSV format:
+## Data and splits
 
-```csv
-question,answer,context,supporting_facts
-"Who founded Microsoft?","Bill Gates and Paul Allen","{""title"":[...],""sentences"":[...]}","{""title"":[...]}"
-```
+Primary labeled corpus: `data/labeled_merged.csv` (~9.8k rows, balanced correct / hallucinated; datasets: ASQA, MS MARCO, WikiEval).
 
-Place your data in:
-- `data/hotpot_qa/train.csv`
-- `data/hotpot_qa/valid.csv`
+Hallucinated IDs use the `_hallu` suffix (e.g. `asqa_0` / `asqa_0_hallu`). Splits are **by base question ID** so pairs never cross train/val/test:
 
-### 3. Train Your RAG System
+- `test_size = 0.2`, `random_state = 42`
+- validation carved from the remaining train IDs (`val_ratio = 0.2`)
+- held-out test persisted to `data/labeled_merged_test.csv`
 
-#### Option A: Train Retriever Only
+Configured in `configs/experiments/filter_training.yaml`.
+
+## DeBERTa / NLI baseline (notebook 5)
+
+1. Pre-training gates (label check, pair spot-check, truncation diagnostic, overfit sanity check).
+2. Fine-tune `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` three times on the same frozen split.
+3. Select threshold on validation with `select_threshold_min_fpr(..., min_recall=0.70)`.
+4. Evaluate on the frozen test CSV; aggregate mean±std.
+5. Compare against zero-shot NLI and a no-filter baseline.
+
+Headless:
 
 ```bash
-python train.py --train-retriever-only \
-    --train-data data/hotpot_qa/train.csv \
-    --valid-data data/hotpot_qa/valid.csv \
-    --retriever-epochs 5 \
-    --retriever-batch-size 16
+python scripts/run_deberta_nli_baseline.py --config configs/experiments/filter_training.yaml
 ```
 
-#### Option B: Train Both Retriever and Generator
+Artifacts:
+
+- `models/answer_filter/run_{1,2,3}/`
+- `results/deberta_nli/run_{1,2,3}/` (threshold, metrics, predictions)
+- `results/deberta_nli/nli_zeroshot/`
+- `results/deberta_nli/summary.json`
+
+**Important:** keep `fp16: false` in `deberta_filter.yaml` (DeBERTa-v3 instability). Prefer GPU with ≥4 GB VRAM; `batch_size: 1` + gradient accumulation targets 4 GB laptop GPUs.
+
+## RAGAS-feature filter (notebooks 3.1–3.2)
+
+Extract black-box RAGAS features (no gold answer at inference), train sklearn classifiers, and evaluate classification quality. See `START_HERE.md` for the RAGAS-oriented walkthrough and `results/ragas_filter/` for existing experiment outputs.
+
+## Notebook order
+
+| # | Notebook | Purpose |
+|---|----------|---------|
+| 0 | Data collection | ASQA / MS MARCO / WikiEval sources |
+| 1 | Synthetic data | Hallucinated answers / labeling |
+| 2 | RAG ASQA baseline | Normal RAG predictions |
+| 3.1 | RAGAS feature extraction | Feature tables for merged data |
+| 3.2 | Filter training | Train RAGAS-feature classifiers |
+| 4 | LLM-judge filter | LLM-as-judge baseline |
+| 5 | DeBERTa / NLI baseline | Fine-tuned + zero-shot NLI (×3) |
+
+## Evaluation conventions
+
+Every filter comparison should report precision, recall, F1, accuracy, FPR, rejection recall / rate, and a confusion matrix. Required baselines in DeBERTa experiments: **No Filter**, **NLI zero-shot**, **fine-tuned DeBERTa**.
+
+Do not use argmax at 0.5 as the final decision rule — always use the validation-selected threshold.
+
+## Tests
 
 ```bash
-python train.py --train-retriever --train-generator \
-    --train-data data/hotpot_qa/train.csv \
-    --valid-data data/hotpot_qa/valid.csv \
-    --retriever-epochs 5 \
-    --generator-epochs 3
+python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
 ```
 
-#### Option C: Use Configuration File
+## License / academic use
 
-```bash
-python train.py --config config.json --train-retriever --train-generator
-```
-
-### 4. Use Trained Models
-
-```python
-from src.config import RAGConfig
-from src.rag_system import RAGSystem
-
-# Load trained system
-config = RAGConfig()
-rag = RAGSystem.from_pretrained(
-    encoder_path="../models/retriever_trained",
-    generator_path="../models/generator_trained",
-    index_path="./rag_output/index",
-    config=config
-)
-
-# Answer questions
-answer = rag.answer("What is the capital of France?")
-print(answer)
-```
-
-## 📚 Usage Examples
-
-### Example 1: Basic QA (No Training)
-
-```python
-from src.config import RAGConfig
-from src.rag_system import RAGSystem
-
-# Initialize system
-config = RAGConfig()
-rag = RAGSystem(config=config)
-
-# Create corpus
-documents = [
-    "The Eiffel Tower is in Paris, France.",
-    "Paris is the capital of France.",
-]
-
-# Build index
-rag.indexer.build_index(documents=documents)
-
-# Answer questions
-answer = rag.answer("Where is the Eiffel Tower?")
-print(answer)  # "Paris, France"
-```
-
-See `examples/basic_qa.py` for full example.
-
-### Example 2: Train Retriever
-
-```python
-from src.config import RAGConfig
-from src.rag_system import RAGSystem
-
-# Configure
-config = RAGConfig(
-    train_data_path="data/hotpot_qa/train.csv",
-    valid_data_path="data/hotpot_qa/valid.csv",
-    retriever_epochs=5
-)
-
-# Initialize and train
-rag = RAGSystem(config=config)
-rag.load_data()
-rag.train_retriever()
-rag.evaluate_retriever()
-rag.build_index()
-```
-
-See `examples/train_retriever.py` for full example.
-
-### Example 3: End-to-End Training
-
-```python
-from src.config import RAGConfig
-from src.rag_system import RAGSystem
-
-# Configure
-config = RAGConfig(
-    train_data_path="data/hotpot_qa/train.csv",
-    valid_data_path="data/hotpot_qa/valid.csv"
-)
-
-# Full pipeline
-rag = RAGSystem(config=config)
-rag.load_data()
-rag.train_retriever()
-rag.evaluate_retriever()
-rag.build_index()
-rag.train_generator()
-
-# Test QA
-answer = rag.answer("Your question here")
-```
-
-See `examples/end_to_end.py` for full example.
-
-## ⚙️ Configuration
-
-The system is highly configurable through the `RAGConfig` class:
-
-```python
-from src.config import RAGConfig
-
-config = RAGConfig(
-    # Models
-    encoder_model="sentence-transformers/all-MiniLM-L6-v2",
-    generator_model="google/flan-t5-base",
-    
-    # Paths
-    models_dir="../models",
-    output_dir="./rag_output",
-    train_data_path="data/hotpot_qa/train.csv",
-    valid_data_path="data/hotpot_qa/valid.csv",
-    
-    # Retriever training
-    retriever_epochs=5,
-    retriever_batch_size=16,
-    retriever_lr=2e-5,
-    retriever_patience=3,
-    
-    # Generator training
-    generator_epochs=3,
-    generator_batch_size=4,
-    generator_lr=5e-5,
-    
-    # Retrieval
-    top_k=5,
-    
-    # Device
-    device="cuda"  # or "cpu"
-)
-```
-
-See `src/config.py` for all available options.
-
-## 📊 Training Details
-
-### Retriever Training
-
-- **Method**: Contrastive learning with in-batch negatives
-- **Loss**: CrossEntropyLoss on similarity matrix
-- **Features**:
-  - Temperature scaling
-  - Gradient accumulation
-  - Mixed precision (FP16)
-  - Early stopping
-  - Model checkpointing
-
-### Generator Training
-
-- **Method**: Seq2seq fine-tuning with retrieved contexts
-- **Loss**: Cross-entropy on token prediction
-- **Features**:
-  - Learning rate warmup
-  - Gradient accumulation
-  - Dynamic context retrieval
-  - Model checkpointing
-
-### Evaluation Metrics
-
-- **Recall@K**: Percentage of queries with relevant doc in top-K
-- **Precision@K**: Average fraction of relevant docs in top-K
-- **MRR**: Mean Reciprocal Rank of first relevant document
-
-## 🔧 Advanced Usage
-
-### Custom Models
-
-```python
-config = RAGConfig(
-    encoder_model="sentence-transformers/all-mpnet-base-v2",  # Larger encoder
-    generator_model="google/flan-t5-large",  # Larger generator
-)
-```
-
-### GPU Training
-
-```python
-config = RAGConfig(
-    device="cuda",
-    retriever_batch_size=32,  # Larger batch for GPU
-    retriever_use_fp16=True,  # Mixed precision
-)
-```
-
-### Custom Data
-
-```python
-from src.data.loader import HotpotQALoader
-
-loader = HotpotQALoader()
-loader.load_data("my_train.csv", "my_valid.csv")
-
-# Use with RAG system
-rag.data_loader = loader
-```
-
-## 📖 Documentation
-
-- **README.md** (this file): Quick start and usage
-- **ARCHITECTURE.md**: Detailed system architecture
-- **src/config.py**: Configuration options
-- **examples/**: Working code examples
-
-## 🛠️ Development
-
-### Running Examples
-
-```bash
-# Basic QA
-python examples/basic_qa.py
-
-# Train retriever
-python examples/train_retriever.py
-
-# End-to-end training
-python examples/end_to_end.py
-```
-
-### Project Structure
-
-The codebase is organized into modules:
-
-- **config**: Configuration management
-- **data**: Data loading and preprocessing
-- **training**: Training logic for retriever and generator
-- **retrieval**: Indexing and QA pipeline
-- **evaluation**: Evaluation metrics
-- **utils**: Utilities (model caching, etc.)
-
-## 📝 Requirements
-
-- Python 3.8+
-- PyTorch 2.0+
-- Transformers 4.30+
-- Sentence Transformers 2.2+
-- FAISS (CPU or GPU)
-- See `requirements.txt` for full list
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📄 License
-
-[Your License Here]
-
-## 🙏 Acknowledgments
-
-- HuggingFace for Transformers and Sentence Transformers
-- Facebook AI for FAISS
-- HotpotQA dataset creators
-
-## 📧 Contact
-
-[Your Contact Information]
-
----
-
-**Note**: This system is designed for training RAG models from scratch. For production use with pre-trained models, consider using LangChain or similar frameworks.
+Research / thesis project. Cite the upstream models and datasets you use (ASQA, MS MARCO, WikiEval, DeBERTa-v3 MNLI, RAGAS).
