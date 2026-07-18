@@ -63,6 +63,8 @@ python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 
 ### Kaggle tips
 
+- Clone or upload the **full** repo (e.g. `/kaggle/working/ragas-evaluation`) so `scripts/`, `src/`, `configs/`, and `data/` are present.
+- Notebook setup auto-detects the repo root (works whether the kernel cwd is `notebooks/` or the repo root). Re-run the Setup cell after pull; it prints `REPO_ROOT` and whether the train script exists.
 - Use a GPU runtime (T4+). On 16 GB GPUs you can set `batch_size: 4` in `deberta_filter.yaml`; 4 GB laptops stay at `1`.
 - Keep `fp16: false`.
 - If HuggingFace download returns **401**, clear an expired token (`hf auth logout` / delete cached HF token) before retrying.
