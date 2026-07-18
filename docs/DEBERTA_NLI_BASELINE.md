@@ -25,6 +25,19 @@ Related: [DATA_AND_SPLITS.md](DATA_AND_SPLITS.md), [EVALUATION.md](EVALUATION.md
 
 ## Local / Kaggle: what to run
 
+
+## Kaggle — simple path (recommended)
+
+1. Clone repo to /kaggle/working/ragas-evaluation
+2. Open 
+otebooks/5_deberta_nli_baseline.ipynb
+3. **Restart kernel**
+4. Run Setup cell (section 1) — must print REPO_ROOT = /kaggle/working/ragas-evaluation
+5. Run gates (section 3) if you want
+6. Run Train cell (section 4)
+
+If Setup fails, edit the first line of Setup to the real folder that contains scripts/.
+
 ### Option A — Notebook (good on Kaggle)
 
 1. Put the repo on the machine so `notebooks/` sits next to `src/`, `configs/`, `data/`.
