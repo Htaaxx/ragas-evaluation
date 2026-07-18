@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -42,12 +43,19 @@ from transformers import (
     TrainingArguments,
     get_linear_schedule_with_warmup,
 )
+from transformers.utils import logging as transformers_logging
 
 from .data_models import FilterDecision
 
 from .config_loader import FILTERING_CONFIG, load_config_section
 
 logger = logging.getLogger(__name__)
+
+# Multi-GPU Trainer often emits this when the loss is already a scalar.
+warnings.filterwarnings(
+    "ignore",
+    message="Was asked to gather along dimension 0, but all input tensors were scalars.*",
+)
 
 
 def _load_learned_filter_config() -> dict:
@@ -66,11 +74,26 @@ def _load_deberta_model(model_name_or_path: str, num_labels: int = 2):
     any ``.gamma/.beta`` keys, and copy them into the model's
     ``.weight/.bias`` slots. No module replacement — the architecture
     stays exactly as HuggingFace built it, so save/reload always works.
+
+    Loading MNLI (3-class) into a 2-class head intentionally reinits the
+    classifier; HF's LOAD REPORT for that mismatch is silenced below.
     """
-    model = AutoModelForSequenceClassification.from_pretrained(
+    prev_verbosity = transformers_logging.get_verbosity()
+    transformers_logging.set_verbosity_error()
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True,
+        )
+    finally:
+        transformers_logging.set_verbosity(prev_verbosity)
+
+    logger.info(
+        "Loaded %s with num_labels=%d "
+        "(3-class MNLI classifier head reinitialized when sizes differ — expected)",
         model_name_or_path,
-        num_labels=num_labels,
-        ignore_mismatched_sizes=True,
+        num_labels,
     )
 
     # --- Remap .gamma/.beta → .weight/.bias from raw checkpoint ---
@@ -147,7 +170,11 @@ def _extract_top1_context(context_str: str, max_chars: int = 800) -> str:
     raw = str(context_str)
 
     try:
-        ctx = ast.literal_eval(raw)
+        # Some passage strings contain tokens that trigger SyntaxWarning
+        # under ast.literal_eval (e.g. odd numeric literals). Safe to ignore.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            ctx = ast.literal_eval(raw)
     except (ValueError, SyntaxError):
         # Already a plain-text passage; nothing to parse.
         return raw[:max_chars]
@@ -758,6 +785,10 @@ def overfit_sanity_check(
     tmp_out = Path(tempfile.mkdtemp(prefix="overfit_check_ckpt_"))
     weight_decay = cfg.get("weight_decay", 0.01)
     warmup_ratio = cfg.get("warmup_ratio", 0.1)
+    # Prefer warmup_steps over deprecated warmup_ratio (transformers >= 5.x).
+    steps_per_epoch = math.ceil(len(overfit_dataset) / batch_size)
+    num_training_steps = steps_per_epoch * epochs
+    warmup_steps = max(0, int(num_training_steps * float(warmup_ratio)))
     args = TrainingArguments(
         output_dir=str(tmp_out),
         num_train_epochs=epochs,
@@ -766,7 +797,7 @@ def overfit_sanity_check(
         # learning_rate here is informational only — the explicit differential
         # optimizer below (passed via optimizers=) overrides it.
         learning_rate=learning_rate,
-        warmup_ratio=warmup_ratio,
+        warmup_steps=warmup_steps,
         weight_decay=weight_decay,
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
         # NaN-DIAG: log EVERY step and do NOT hide nan/inf losses, so the raw
@@ -781,8 +812,6 @@ def overfit_sanity_check(
 
     # ROOT-CAUSE FIX: per-group eps differential optimizer (same as full
     # training). Backbone = large eps (stable), head = small eps (learns).
-    steps_per_epoch = math.ceil(len(overfit_dataset) / batch_size)
-    num_training_steps = steps_per_epoch * epochs
     optimizer, scheduler = _build_differential_optimizer(
         model,
         backbone_lr=backbone_lr,
@@ -1142,14 +1171,24 @@ def train_classifier(
         padding=True,
     )
 
+    # --- Differential-LR optimizer + scheduler (root-cause fix) ---
+    # A single shared LR (1e-5) left the randomly-initialized 2-class head
+    # undertrained and collapsed the model to all-reject. Give the backbone
+    # the small LR and the fresh head a larger one, with a matching warmup
+    # scheduler. Steps must match the TrainingArguments grad-accum setting.
+    grad_accum = max(1, 16 // batch_size)
+    steps_per_epoch = math.ceil(len(train_dataset) / (batch_size * grad_accum))
+    num_training_steps = steps_per_epoch * num_epochs
+    warmup_steps = max(0, int(num_training_steps * float(warmup_ratio)))
+
     training_args = TrainingArguments(
         output_dir=str(output_path / "checkpoints"),
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size * 2,
-        gradient_accumulation_steps=max(1, 16 // batch_size),
+        gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
-        warmup_ratio=warmup_ratio,
+        warmup_steps=warmup_steps,
         weight_decay=weight_decay,
         max_grad_norm=max_grad_norm,
         label_smoothing_factor=label_smoothing,
@@ -1166,14 +1205,6 @@ def train_classifier(
         report_to="none",
     )
 
-    # --- Differential-LR optimizer + scheduler (root-cause fix) ---
-    # A single shared LR (1e-5) left the randomly-initialized 2-class head
-    # undertrained and collapsed the model to all-reject. Give the backbone
-    # the small LR and the fresh head a larger one, with a matching warmup
-    # scheduler. Steps must match the TrainingArguments grad-accum setting.
-    grad_accum = max(1, 16 // batch_size)
-    steps_per_epoch = math.ceil(len(train_dataset) / (batch_size * grad_accum))
-    num_training_steps = steps_per_epoch * num_epochs
     optimizer, scheduler = _build_differential_optimizer(
         model,
         backbone_lr=learning_rate,
