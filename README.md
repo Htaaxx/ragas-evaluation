@@ -127,6 +127,15 @@ Every filter comparison should report precision, recall, F1, accuracy, FPR, reje
 
 Do not use argmax at 0.5 as the final decision rule — always use the validation-selected threshold.
 
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [START_HERE.md](START_HERE.md) | Onboarding path (env → notebooks → DeBERTa run) |
+| [docs/DATA_AND_SPLITS.md](docs/DATA_AND_SPLITS.md) | Merged corpus schema, `_hallu` pairing, freeze protocol |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | North-star metric, baselines, shared report columns |
+| [docs/DEBERTA_NLI_BASELINE.md](docs/DEBERTA_NLI_BASELINE.md) | Kaggle/local 3-run protocol and artifact paths |
+
 ## Tests
 
 ```bash

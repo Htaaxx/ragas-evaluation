@@ -92,3 +92,11 @@ Notebooks are thin. Core code is under `src/filtering/`:
 - `ragas_*.py` — RAGAS-feature filter stack
 
 See the root `README.md` for the full thesis overview.
+
+## 7. Further reading
+
+| Doc | When to open it |
+|-----|-----------------|
+| [docs/DATA_AND_SPLITS.md](docs/DATA_AND_SPLITS.md) | Schema, `_hallu` pairs, how the frozen test CSV is built |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | North-star threshold rule and shared metrics table |
+| [docs/DEBERTA_NLI_BASELINE.md](docs/DEBERTA_NLI_BASELINE.md) | Kaggle steps, gates, and which files to download after training |
