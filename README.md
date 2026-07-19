@@ -22,7 +22,7 @@ Two complementary filter families are implemented:
 
 Download the `models/` directory from the following Google Drive link:
 
-https://drive.google.com/drive/folders/1ZrcY2-_Llr5GJSeZESIXcUmcUWDfjjBc?usp=sharing
+https://drive.google.com/drive/folders/1eM01wBvXfrfSgNF0EVIA0PAGErqTj5z0?usp=sharing
 
 After downloading, place it in the project root so that the directory structure becomes:
 
