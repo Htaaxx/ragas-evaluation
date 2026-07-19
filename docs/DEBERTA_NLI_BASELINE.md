@@ -18,10 +18,10 @@ Related: [DATA_AND_SPLITS.md](DATA_AND_SPLITS.md), [EVALUATION.md](EVALUATION.md
    - Spot-check paired samples
    - Truncation collision diagnostic (< 5%)
    - `overfit_sanity_check` (train F1 ≥ 0.95) — **hard gate**
-4. Train DeBERTa **3 identical runs** (same split/seed).
-5. Per run: select threshold on val with min-FPR @ recall ≥ 0.70; evaluate on frozen test.
+4. Train DeBERTa **once** by default (`n_runs: 1` in `filter_training.yaml`; raise if you need mean±std).
+5. Select threshold on val with min-FPR @ recall ≥ 0.70; evaluate on frozen test.
 6. Run zero-shot NLI once on the same test set (val-thresholded).
-7. Aggregate mean±std; write classification reports.
+7. Write classification reports.
 
 ## Local / Kaggle: what to run
 
@@ -81,7 +81,7 @@ python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 - Use a GPU runtime (T4+). On 16 GB GPUs you can set `batch_size: 4` in `deberta_filter.yaml`; 4 GB laptops stay at `1`.
 - Keep `fp16: false`.
 - If HuggingFace download returns **401**, clear an expired token (`hf auth logout` / delete cached HF token) before retrying.
-- Save / download artifacts before the session ends (see below). One session should cover all 3 runs + NLI.
+- Save / download artifacts before the session ends (see below). One session should cover DeBERTa + NLI.
 
 ## Artifacts
 
@@ -92,7 +92,7 @@ python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 | `results/deberta_nli/run_{k}/learned_filter_test_results.json` | Test FilterResult |
 | `results/deberta_nli/run_{k}/test_predictions.csv` | Per-row preds |
 | `results/deberta_nli/run_{k}/classification_report.csv` | Per-dataset table |
-| `results/deberta_nli/summary_classification_report.csv` | **Mean over 3 runs** (thesis table) |
+| `results/deberta_nli/summary_classification_report.csv` | Thesis table (one run, or mean if `n_runs` > 1) |
 | `results/deberta_nli/summary.json` | Full aggregate + comparison |
 | `results/deberta_nli/nli_zeroshot/` | Zero-shot NLI results |
 | `results/deberta_nli/no_filter_classification_report.csv` | Accept-all baseline |

@@ -56,11 +56,11 @@ This will:
 
 1. Rebuild the leakage-safe split and refresh `data/labeled_merged_test.csv`
 2. Run the overfit sanity gate (must reach train F1 ≥ 0.95)
-3. Train DeBERTa three times → `models/answer_filter/run_{1,2,3}/`
-4. Pick min-FPR thresholds on val (recall ≥ 0.70)
+3. Train DeBERTa once (`n_runs: 1`) → `models/answer_filter/run_1/`
+4. Pick min-FPR threshold on val (recall ≥ 0.70)
 5. Evaluate on the frozen test set
 6. Run zero-shot NLI once
-7. Write `results/deberta_nli/summary.json` with mean±std
+7. Write `results/deberta_nli/summary.json`
 
 Resume evaluation only (checkpoints already trained):
 
@@ -72,7 +72,7 @@ python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 
 - Filter framing is always `(context, answer)`, not `(question, answer)`.
 - Final decisions use the **validation-selected threshold**, never argmax@0.5.
-- Comparison tables include **No Filter**, **NLI zero-shot**, and **DeBERTa (mean±std)**.
+- Comparison tables include **No Filter**, **NLI zero-shot**, and **DeBERTa**.
 - Keep `fp16: false` for DeBERTa-v3.
 
 ## 5. Quick smoke tests

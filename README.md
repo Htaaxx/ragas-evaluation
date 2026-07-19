@@ -35,9 +35,9 @@ ragas-evaluation/
 │   ├── 3.1_ragas-feature-extraction.ipynb
 │   ├── 3.2_filter-training.ipynb
 │   ├── 4_llm-judge-filter.ipynb
-│   └── 5_deberta_nli_baseline.ipynb     # DeBERTa/NLI baseline (×3 runs)
+│   └── 5_deberta_nli_baseline.ipynb     # DeBERTa/NLI baseline
 ├── scripts/
-│   ├── run_deberta_nli_baseline.py      # headless DeBERTa ×3 + NLI
+│   ├── run_deberta_nli_baseline.py      # headless DeBERTa + NLI
 │   ├── train_filter.py / evaluate_filter.py
 │   └── run_filter_on_rag.py
 ├── src/
@@ -85,9 +85,9 @@ Configured in `configs/experiments/filter_training.yaml`.
 ## DeBERTa / NLI baseline (notebook 5)
 
 1. Pre-training gates (label check, pair spot-check, truncation diagnostic, overfit sanity check).
-2. Fine-tune `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` three times on the same frozen split.
+2. Fine-tune `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` once on the frozen split (`n_runs: 1`).
 3. Select threshold on validation with `select_threshold_min_fpr(..., min_recall=0.70)`.
-4. Evaluate on the frozen test CSV; aggregate mean±std.
+4. Evaluate on the frozen test CSV.
 5. Compare against zero-shot NLI and a no-filter baseline.
 
 Headless:
@@ -98,8 +98,8 @@ python scripts/run_deberta_nli_baseline.py --config configs/experiments/filter_t
 
 Artifacts:
 
-- `models/answer_filter/run_{1,2,3}/`
-- `results/deberta_nli/run_{1,2,3}/` (threshold, metrics, predictions)
+- `models/answer_filter/run_1/`
+- `results/deberta_nli/run_1/` (threshold, metrics, predictions)
 - `results/deberta_nli/nli_zeroshot/`
 - `results/deberta_nli/summary.json`
 
@@ -119,7 +119,7 @@ Extract black-box RAGAS features (no gold answer at inference), train sklearn cl
 | 3.1 | RAGAS feature extraction | Feature tables for merged data |
 | 3.2 | Filter training | Train RAGAS-feature classifiers |
 | 4 | LLM-judge filter | LLM-as-judge baseline |
-| 5 | DeBERTa / NLI baseline | Fine-tuned + zero-shot NLI (×3) |
+| 5 | DeBERTa / NLI baseline | Fine-tuned + zero-shot NLI |
 
 ## Evaluation conventions
 

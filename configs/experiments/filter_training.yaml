@@ -11,4 +11,4 @@ filtering_config: configs/filtering/deberta_filter.yaml
 model_output: models/answer_filter
 results_dir: results/deberta_nli
 min_recall_for_threshold: 0.70
-n_runs: 3
+n_runs: 1

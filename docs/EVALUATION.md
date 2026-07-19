@@ -28,7 +28,7 @@ Config key: `min_recall_for_threshold` in `configs/experiments/filter_training.y
 |----------|-------------|
 | No Filter | Accept everything |
 | NLI zero-shot | `NLIAnswerFilter` with P(entailment), thresholded on val |
-| Fine-tuned DeBERTa | `AnswerQualityClassifier` trained ×3; report mean±std |
+| Fine-tuned DeBERTa | `AnswerQualityClassifier` (`n_runs: 1` by default) |
 
 ## Shared classification table
 
