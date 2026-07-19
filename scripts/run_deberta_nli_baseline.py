@@ -297,10 +297,11 @@ def main() -> None:
             orient="records",
         )
 
+    deberta_label = "DeBERTa" if n_runs == 1 else "DeBERTa (mean±std)"
     comparison = {
         "No Filter": summary["no_filter"],
         "NLI zero-shot": summary.get("nli_zeroshot"),
-        "DeBERTa (mean±std)": {
+        deberta_label: {
             k: f"{v['mean']:.4f}±{v['std']:.4f}"
             for k, v in summary["deberta_mean_std"].items()
         },
@@ -312,7 +313,7 @@ def main() -> None:
         json.dump(summary, fh, indent=2, default=str)
     logger.info("Wrote %s", out_path)
     print(json.dumps(comparison, indent=2))
-    print("\n=== summary_classification_report (DeBERTa mean over runs) ===")
+    print("\n=== summary_classification_report (DeBERTa) ===")
     print(summary_report.to_string(index=False))
 
 

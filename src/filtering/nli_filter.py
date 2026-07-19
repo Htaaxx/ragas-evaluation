@@ -102,10 +102,12 @@ class NLIAnswerFilter:
     def predict(self, context: str, answer: str) -> FilterDecision:
         """Check if context entails the answer (faithfulness)."""
         logger.info("NLIAnswerFilter.predict using threshold=%.3f", self.threshold)
+        # Use longest_first (same as learned_filter): only_first crashes when
+        # the hypothesis/answer alone exceeds max_length.
         inputs = self.tokenizer(
             f"Premise: {context}", f"Hypothesis: {answer}",
             return_tensors="pt",
-            truncation="only_first",
+            truncation="longest_first",
             max_length=self.max_length,
         ).to(self.device)
 
@@ -142,7 +144,7 @@ class NLIAnswerFilter:
             inputs = self.tokenizer(
                 batch_c, batch_a,
                 return_tensors="pt",
-                truncation="only_first",
+                truncation="longest_first",
                 padding=True,
                 max_length=self.max_length,
             ).to(self.device)
