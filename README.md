@@ -29,15 +29,14 @@ ragas-evaluation/
 │   ├── labeled_merged.csv               # ASQA + MS MARCO + WikiEval labels
 │   └── labeled_merged_test.csv          # frozen holdout (base-ID split, seed=42)
 ├── notebooks/
-│   ├── 0_data_collection.ipynb
 │   ├── 1_synthetic-data.ipynb
 │   ├── 2_rag-asqa-baseline.ipynb
 │   ├── 3.1_ragas-feature-extraction.ipynb
 │   ├── 3.2_filter-training.ipynb
 │   ├── 4_llm-judge-filter.ipynb
-│   └── 5_deberta_nli_baseline.ipynb     # DeBERTa/NLI baseline
+│   └── 5_deberta_nli_baseline.ipynb     
 ├── scripts/
-│   ├── run_deberta_nli_baseline.py      # headless DeBERTa + NLI
+│   ├── run_deberta_nli_baseline.py      
 │   ├── train_filter.py / evaluate_filter.py
 │   └── run_filter_on_rag.py
 ├── src/

@@ -36,15 +36,6 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Models and data (large files)
-models/
-*.bin
-*.safetensors
-*.pt
-*.pth
-*.h5
-*.ckpt
-
 # Outputs
 rag_output/
 examples_output/
