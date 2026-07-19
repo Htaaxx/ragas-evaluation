@@ -87,7 +87,7 @@ python scripts/run_deberta_nli_baseline.py --skip-train --skip-overfit-gate
 
 | Path | Contents |
 |------|----------|
-| `models/answer_filter/run_{1,2,3}/` | Checkpoints |
+| `models/answer_filter/run_1/` | Checkpoint(s); more `run_*` dirs if `n_runs` > 1 |
 | `results/deberta_nli/run_{k}/threshold_selection.json` | Val threshold sweep |
 | `results/deberta_nli/run_{k}/learned_filter_test_results.json` | Test FilterResult |
 | `results/deberta_nli/run_{k}/test_predictions.csv` | Per-row preds |
