@@ -66,9 +66,56 @@ def test_load_and_split_merged_smoke() -> None:
     if not csv_path.exists():
         return
     train_df, val_df, test_df = load_and_split(
-        str(csv_path), test_ratio=0.2, val_ratio=0.2, seed=42,
+        str(csv_path),
+        test_ratio=0.2,
+        val_ratio=0.2,
+        seed=42,
+        reuse_frozen_test=False,
     )
     total = len(train_df) + len(val_df) + len(test_df)
     assert total == len(pd.read_csv(csv_path))
     # ~20% test by base IDs; allow some slack for uneven pair sizes
     assert 0.15 * total <= len(test_df) <= 0.30 * total
+
+
+def test_reuse_frozen_test_csv(tmp_path: Path) -> None:
+    rows = []
+    for i in range(20):
+        rows.append(
+            {
+                "id": f"asqa_{i}",
+                "question": f"q{i}",
+                "context": f"c{i}",
+                "answer": f"a{i}",
+                "label": 1,
+                "dataset": "asqa",
+            }
+        )
+        rows.append(
+            {
+                "id": f"asqa_{i}_hallu",
+                "question": f"q{i}",
+                "context": f"c{i}",
+                "answer": f"h{i}",
+                "label": 0,
+                "dataset": "asqa",
+            }
+        )
+    full = tmp_path / "labeled.csv"
+    frozen = tmp_path / "labeled_test.csv"
+    pd.DataFrame(rows).to_csv(full, index=False)
+    # Freeze first 4 base ids (8 rows) as test
+    test_rows = [r for r in rows if to_base_id(r["id"]) in {"asqa_0", "asqa_1", "asqa_2", "asqa_3"}]
+    pd.DataFrame(test_rows).to_csv(frozen, index=False)
+
+    train_df, val_df, test_df = load_and_split(
+        str(full),
+        val_ratio=0.25,
+        seed=42,
+        test_csv_path=frozen,
+        reuse_frozen_test=True,
+    )
+    assert len(test_df) == 8
+    assert set(test_df["id"].astype(str)).isdisjoint(set(train_df["id"].astype(str)))
+    assert set(test_df["id"].astype(str)).isdisjoint(set(val_df["id"].astype(str)))
+    assert len(train_df) + len(val_df) + len(test_df) == 40

@@ -75,3 +75,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Local Kaggle dumps / packaging output
+results/kaggle_*/
+dist/
+.pytest_cache/

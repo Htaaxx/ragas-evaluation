@@ -4,8 +4,8 @@
 
 | File | Role |
 |------|------|
-| `data/labeled_merged.csv` | Full labeled train/val/test source (~9.8k rows) |
-| `data/labeled_merged_test.csv` | Frozen holdout written by the leakage-safe split |
+| `data/labeled_merged.csv` | Full corpus; train/val exclude rows already in the frozen test file |
+| `data/labeled_merged_test.csv` | Frozen holdout used for final DeBERTa / NLI evaluation |
 
 Merged composition (approx.): ASQA + MS MARCO + WikiEval. Labels are balanced correct / hallucinated.
 
@@ -36,20 +36,20 @@ Legacy ASQA used a trailing `b` (`asqa_0b`). Split code accepts both via `to_bas
 Configured in `configs/experiments/filter_training.yaml`:
 
 ```yaml
-test_ratio: 0.2
-val_ratio: 0.2   # of remaining after test split
+test_ratio: 0.2          # only if frozen test CSV is missing
+val_ratio: 0.2
 seed: 42
+reuse_frozen_test: true
 ```
 
-Algorithm (`load_and_split`):
+Default evaluation path (`reuse_frozen_test: true`):
 
-1. Map every `id` → base id (`strip _hallu`, then trailing `b`).
-2. `train_test_split(base_ids, test_size=0.2, random_state=42)`.
-3. Split remaining base ids into train / val with `val_ratio=0.2`.
-4. Assign all rows whose base id falls in a fold to that fold (pairs stay together).
-5. Optionally persist test rows to `data/labeled_merged_test.csv`.
+1. Load `data/labeled_merged_test.csv` as the fixed test holdout.
+2. Take remaining rows from `data/labeled_merged.csv`.
+3. Split remaining base IDs into train / val (`val_ratio`, `seed=42`).
 
-This matches the intent of a simple `train_test_split(df, test_size=0.2, random_state=42)` while preventing correct/hallu twins from crossing the train–test boundary.
+If the frozen test file is missing, fall back to sampling a test split from
+base IDs (`test_ratio=0.2`) and writing `labeled_merged_test.csv`.
 
 ## Other data folders
 

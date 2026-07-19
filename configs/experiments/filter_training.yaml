@@ -1,11 +1,13 @@
 # Filter training experiment settings (paths + split; hyperparams in deberta_filter.yaml)
 
 data:
+  # Full corpus for train/val. Held-out evaluation always uses test_csv when present.
   labeled_csv: data/labeled_merged.csv
   test_csv: data/labeled_merged_test.csv
-  test_ratio: 0.2
+  test_ratio: 0.2          # only used if test_csv is missing
   val_ratio: 0.2
   seed: 42
+  reuse_frozen_test: true
 
 filtering_config: configs/filtering/deberta_filter.yaml
 model_output: models/answer_filter

@@ -1,0 +1,66 @@
+================================================================================
+HUONG DAN SU DUNG - RAG Answer Faithfulness Filtering
+================================================================================
+
+Muc tieu: loc cau tra loi RAG theo do trung thuc (faithfulness) voi context.
+Pipeline: retrieve -> generate -> filter(context, answer) -> accept/reject.
+
+1. CAU TRUC CHINH
+-----------------
+  src/filtering/     : thu vien loc (DeBERTa, NLI, RAGAS, LLM-judge)
+  configs/           : cau hinh thi nghiem
+  scripts/           : chay khong can notebook
+  notebooks/         : notebook thuc nghiem (0..5)
+  data/              : labeled_merged.csv + labeled_merged_test.csv
+  docs/              : tai lieu bo sung (tieng Anh)
+
+2. CHAY NHANH - BASELINE DeBERTa / NLI (notebook 5)
+---------------------------------------------------
+Kich hoat venv, roi:
+
+    python scripts/run_deberta_nli_baseline.py ^
+      --config configs/experiments/filter_training.yaml
+
+(Linux/macOS dung \ thay cho ^)
+
+Hoac mo notebooks/5_deberta_nli_baseline.ipynb:
+  1) Restart kernel
+  2) Chay cell Setup
+  3) (Tuy chon) chay cac gate
+  4) Chay cell Train
+
+Ket qua:
+  - models/answer_filter/run_1/
+  - results/deberta_nli/summary_classification_report.csv
+  - results/deberta_nli/summary.json
+  - results/deberta_nli/nli_zeroshot/
+
+Danh gia luon dung data/labeled_merged_test.csv (tap test dong bang).
+Train/val lay tu data/labeled_merged.csv sau khi loai cac mau test.
+
+Chi chay lai NLI (bo qua train DeBERTa):
+
+    python scripts/run_deberta_nli_baseline.py ^
+      --config configs/experiments/filter_training.yaml ^
+      --skip-train --skip-overfit-gate
+
+3. RAGAS FILTER (phuong phap chinh)
+-----------------------------------
+Xem notebooks:
+  - 3.1_ragas-feature-extraction.ipynb
+  - 3.2_filter-training.ipynb
+
+Hoac START_HERE.md / README.md.
+
+4. KIEM TRA DON VI
+------------------
+    python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
+
+5. GHI CHU DANH GIA
+-------------------
+- Nguong DeBERTa chon tren val bang min-FPR @ recall >= 0.70
+- Khong dung argmax tai 0.5 lam quyet dinh cuoi
+- Bang ket qua: dataset,num_samples,accepted,acceptance_rate,accuracy,precision,recall,f1,roc_auc
+
+Chi tiet: docs/DEBERTA_NLI_BASELINE.md , docs/EVALUATION.md , docs/DATA_AND_SPLITS.md
+================================================================================

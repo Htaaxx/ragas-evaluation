@@ -66,6 +66,7 @@ def main() -> None:
         test_csv_path=str(resolve_path(data_cfg["test_csv"]))
         if data_cfg.get("test_csv")
         else None,
+        reuse_frozen_test=bool(data_cfg.get("reuse_frozen_test", True)),
     )
 
     model_path = str(resolve_path(args.model_path or cfg["model_output"]))

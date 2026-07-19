@@ -176,14 +176,19 @@ def main() -> None:
     results_root.mkdir(parents=True, exist_ok=True)
     model_root = resolve_path(cfg["model_output"])
 
+    test_csv = data_cfg.get("test_csv")
     train_df, val_df, test_df = load_and_split(
         csv_path=str(resolve_path(data_cfg["labeled_csv"])),
         test_ratio=data_cfg["test_ratio"],
         val_ratio=data_cfg["val_ratio"],
         seed=data_cfg["seed"],
-        test_csv_path=str(resolve_path(data_cfg["test_csv"]))
-        if data_cfg.get("test_csv")
-        else None,
+        test_csv_path=str(resolve_path(test_csv)) if test_csv else None,
+        reuse_frozen_test=bool(data_cfg.get("reuse_frozen_test", True)),
+    )
+    logger.info(
+        "Eval holdout: %d rows from %s",
+        len(test_df),
+        test_csv or "(resampled test split)",
     )
 
     if not args.skip_overfit_gate and not args.skip_train:

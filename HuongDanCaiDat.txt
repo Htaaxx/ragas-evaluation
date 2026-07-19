@@ -1,0 +1,58 @@
+================================================================================
+HUONG DAN CAI DAT - RAG Answer Faithfulness Filtering
+================================================================================
+
+1. YEU CAU HE THONG
+-------------------
+- Python 3.10+ (khuyen nghi 3.11 hoặc 3.12)
+- Windows / Linux / macOS
+- GPU NVIDIA (khuyen nghi) de train DeBERTa; CPU van chay duoc nhung cham
+- Dung luong o dia: ~5 GB (moi truong + model HuggingFace tai ve)
+
+2. CAI DAT MOI TRUONG
+---------------------
+Mo terminal tai thu muc goc cua de tai (thu muc chua file nay), chay:
+
+    python -m venv venv
+
+Windows:
+    venv\Scripts\activate
+
+Linux/macOS:
+    source venv/bin/activate
+
+Cai thu vien (KHONG dong goi san trong ban nop; cai tu PyPI):
+
+    pip install -r requirements.txt
+
+Neu train DeBERTa tren GPU NVIDIA:
+
+    pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+3. DU LIEU
+----------
+Tap du lieu nam trong thu muc data/:
+  - data/labeled_merged.csv       : toan bo mau de train/val
+  - data/labeled_merged_test.csv  : tap test dong bang (holdout) de danh gia
+
+Khong can tai them neu da co 2 file tren trong goi ma nguon.
+
+4. CAU HINH
+-----------
+- configs/experiments/filter_training.yaml  : duong dan data, seed, n_runs
+- configs/filtering/deberta_filter.yaml     : sieu tham so DeBERTa / NLI
+
+Mac dinh:
+  - train tren labeled_merged.csv (tru cac mau trong test)
+  - danh gia tren labeled_merged_test.csv
+  - n_runs: 1
+  - seed: 42, test_size / val_ratio: 0.2
+
+5. LUU Y
+--------
+- Khong can copy thu muc venv/ hoac site-packages vao ban nop.
+- Model DeBERTa se tu dong tai tu HuggingFace lan dau chay
+  (MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli).
+- Neu gap loi HuggingFace 401: dang xuat token het han (hf auth logout)
+  roi chay lai.
+================================================================================
