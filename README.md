@@ -20,6 +20,12 @@ Two complementary filter families are implemented:
 
 ## Repository layout
 
+Download the `models/` directory from the following Google Drive link:
+
+https://drive.google.com/drive/folders/1ZrcY2-_Llr5GJSeZESIXcUmcUWDfjjBc?usp=sharing
+
+After downloading, place it in the project root so that the directory structure becomes:
+
 ```text
 ragas-evaluation/
 ├── configs/
@@ -49,11 +55,13 @@ ragas-evaluation/
 │   │   └── llm_judge_filter.py
 │   ├── evaluation/                      # shared evaluators / plots
 │   └── utils/
-├── models/answer_filter/run_{1,2,3}/    # DeBERTa checkpoints
+├── models/
 └── results/deberta_nli/                 # thresholds, per-run metrics, summary.json
 ```
 
 ## Setup
+
+Download models dir from https://drive.google.com/drive/folders/1ZrcY2-_Llr5GJSeZESIXcUmcUWDfjjBc?usp=sharing
 
 ```bash
 python -m venv venv
