@@ -1,66 +1,210 @@
 ================================================================================
-HUONG DAN SU DUNG - RAG Answer Faithfulness Filtering
+                    HUONG DAN SU DUNG - RAGAS Answer Filtering
 ================================================================================
 
-Muc tieu: loc cau tra loi RAG theo do trung thuc (faithfulness) voi context.
-Pipeline: retrieve -> generate -> filter(context, answer) -> accept/reject.
+Du an nay la ma Python (khong can bien dich). "Chay chuong trinh" co nghia
+la kich hoat moi truong ao, roi chay notebook hoac script Python tuong ung.
 
-1. CAU TRUC CHINH
------------------
-  src/filtering/     : thu vien loc (DeBERTa, NLI, RAGAS, LLM-judge)
-  configs/           : cau hinh thi nghiem
-  scripts/           : chay khong can notebook
-  notebooks/         : notebook thuc nghiem (0..5)
-  data/              : labeled_merged.csv + labeled_merged_test.csv
-  docs/              : tai lieu bo sung (tieng Anh)
+Dieu kien tien quyet: da cai dat theo file HuongDanCaiDat.txt
+(moi truong ao, pip install -r requirements.txt, file .env voi OPENAI_API_KEY
+neu chay RAGAS / LLM-judge).
 
-2. CHAY NHANH - BASELINE DeBERTa / NLI (notebook 5)
----------------------------------------------------
-Kich hoat venv, roi:
+Pipeline:
 
-    python scripts/run_deberta_nli_baseline.py ^
-      --config configs/experiments/filter_training.yaml
+  retrieve -> generate -> filter(context, answer) -> accept / reject
 
-(Linux/macOS dung \ thay cho ^)
+Phuong phap chinh: RAGAS-feature filter (notebook 3.1 -> 3.2).
+Baseline: LLM-as-judge (notebook 4), DeBERTa / NLI (notebook 5 / script).
 
-Hoac mo notebooks/5_deberta_nli_baseline.ipynb:
-  1) Restart kernel
-  2) Chay cell Setup
-  3) (Tuy chon) chay cac gate
-  4) Chay cell Train
+--------------------------------------------------------------------------------
+1. KICH HOAT MOI TRUONG
+--------------------------------------------------------------------------------
 
-Ket qua:
-  - models/answer_filter/run_1/
-  - results/deberta_nli/summary_classification_report.csv
-  - results/deberta_nli/summary.json
-  - results/deberta_nli/nli_zeroshot/
+  Windows:
+      venv\Scripts\activate
 
-Danh gia luon dung data/labeled_merged_test.csv (tap test dong bang).
-Train/val lay tu data/labeled_merged.csv sau khi loai cac mau test.
+  Linux / macOS:
+      source venv/bin/activate
 
-Chi chay lai NLI (bo qua train DeBERTa):
+  cd <duong-dan-toi-thu-muc-ragas-evaluation>
 
-    python scripts/run_deberta_nli_baseline.py ^
-      --config configs/experiments/filter_training.yaml ^
-      --skip-train --skip-overfit-gate
+--------------------------------------------------------------------------------
+2. PHUONG PHAP CHINH - RAGAS FILTER
+--------------------------------------------------------------------------------
 
-3. RAGAS FILTER (phuong phap chinh)
------------------------------------
-Xem notebooks:
-  - 3.1_ragas-feature-extraction.ipynb
-  - 3.2_filter-training.ipynb
+  Muc tieu: trich dac trung RAGAS (khong dung gold answer luc suy luan),
+  roi huan luyen bo loc sklearn accept/reject.
 
-Hoac START_HERE.md / README.md.
+  2.1. Trich dac trung (notebook 3.1)
 
-4. KIEM TRA DON VI
-------------------
-    python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
+      Mo notebooks/3.1_ragas-feature-extraction.ipynb
+      Restart kernel, chay lan luot cac cell.
 
-5. GHI CHU DANH GIA
--------------------
-- Nguong DeBERTa chon tren val bang min-FPR @ recall >= 0.70
-- Khong dung argmax tai 0.5 lam quyet dinh cuoi
-- Bang ket qua: dataset,num_samples,accepted,acceptance_rate,accuracy,precision,recall,f1,roc_auc
+      - Input : data/labeled_merged.csv
+      - Can   : OPENAI_API_KEY trong .env
+      - Model : gpt-4o-mini + text-embedding-3-small (temperature=0)
+      - Metric dung (black-box):
+            faithfulness, answer_relevancy, context_relevancy
+        (khong dung answer_correctness / answer_similarity)
+      - Mac dinh chay N_TIMES=3 (3 lan trich cung cau hinh)
 
-Chi tiet: docs/DEBERTA_NLI_BASELINE.md , docs/EVALUATION.md , docs/DATA_AND_SPLITS.md
+      Output:
+        results/ragas_filter/merged/merged_ragas_features_1.csv
+        results/ragas_filter/merged/merged_ragas_features_2.csv
+        results/ragas_filter/merged/merged_ragas_features_3.csv
+        results/ragas_filter/merged/merged_ragas_checkpoints_*.csv
+
+      Luu y: buoc nay goi API OpenAI — ton thoi gian va chi phi.
+      Nen thu tren subset truoc khi chay toan bo (~9800 mau).
+
+  2.2. Huan luyen bo loc (notebook 3.2)
+
+      Mo notebooks/3.2_filter-training.ipynb
+      Restart kernel, chay lan luot cac cell.
+
+      - Input : labeled_merged.csv + file features tu buoc 2.1
+      - Mo hinh sklearn (LR, RF, GB, ExtraTrees, HistGB, tuy chon XGBoost)
+      - train_test_split(test_size=0.2, random_state=42) tren hang feature
+
+      Output:
+        models/ragas_filter/*.joblib
+        results/ragas_filter/merged/average_results.csv
+        results/ragas_filter/merged/summary_classification_report.csv
+        results/ragas_filter/ragas_filter_merged_summary.csv
+
+--------------------------------------------------------------------------------
+3. BASELINE LLM-AS-JUDGE
+--------------------------------------------------------------------------------
+
+  Mo notebooks/4_llm-judge-filter.ipynb
+  Restart kernel, chay lan luot cac cell.
+
+  - Input : data/labeled_merged_test.csv (tap test dong bang)
+  - Can   : OPENAI_API_KEY; model mac dinh gpt-4o-mini
+  - Chay  : LLMJudgeFilter, thuong 3 lan (predictions_run_1..3)
+
+  Output:
+    results/llm_filter/classification/predictions_run_1.csv
+    results/llm_filter/classification/predictions_run_2.csv
+    results/llm_filter/classification/predictions_run_3.csv
+    results/llm_filter/classification/llm_judge_summary.csv
+
+--------------------------------------------------------------------------------
+4. BASELINE DeBERTa / NLI
+--------------------------------------------------------------------------------
+
+  Khong bat buoc OpenAI. Can GPU de train nhanh (CPU van duoc).
+
+  4.1. Chay bang script (khuyen nghi)
+
+      python scripts/run_deberta_nli_baseline.py ^
+        --config configs/experiments/filter_training.yaml
+
+      (Linux/macOS dung \ de xuong dong; PowerShell dung ` hoac viet 1 dong.)
+
+  4.2. Chay bang notebook
+
+      Mo notebooks/5_deberta_nli_baseline.ipynb
+      Restart kernel -> Setup -> (tuy chon) gates -> Train
+
+  Cau hinh:
+    configs/experiments/filter_training.yaml
+    configs/filtering/deberta_filter.yaml
+
+  Mac dinh:
+    - Train/val tu data/labeled_merged.csv (loai mau nam trong test)
+    - Danh gia tren data/labeled_merged_test.csv (reuse_frozen_test: true)
+    - n_runs: 1, seed: 42
+    - Nguong tren val: min-FPR @ recall >= 0.70
+    - Giu fp16: false trong deberta_filter.yaml
+
+  Output:
+    models/answer_filter/run_1/
+    results/deberta_nli/run_1/
+    results/deberta_nli/nli_zeroshot/
+    results/deberta_nli/summary.json
+    results/deberta_nli/summary_classification_report.csv
+
+  Chi chay lai NLI (bo qua train DeBERTa):
+
+      python scripts/run_deberta_nli_baseline.py ^
+        --config configs/experiments/filter_training.yaml ^
+        --skip-train --skip-overfit-gate
+
+--------------------------------------------------------------------------------
+5. DU LIEU VA SPLIT
+--------------------------------------------------------------------------------
+
+  data/labeled_merged.csv
+      ~9800 mau; cot: id, question, context, answer, label, dataset
+      Nguon: ASQA + MS MARCO + WikiEval
+      Mau ao giac dung hau to _hallu (vi du asqa_0 / asqa_0_hallu)
+
+  data/labeled_merged_test.csv
+      Tap holdout dong bang (base-ID split, seed=42, test_size=0.2)
+      Dung cho LLM-judge va DeBERTa / NLI
+
+  Split DeBERTa: theo base question ID de cap (correct/_hallu) khong
+  bi lo qua train/val/test. Cau hinh: configs/experiments/filter_training.yaml
+
+  RAGAS notebook 3.2 dung train_test_split tren hang feature
+  (khac protocol freeze test cua DeBERTa).
+
+--------------------------------------------------------------------------------
+6. TINH METRIC / BAO CAO
+--------------------------------------------------------------------------------
+
+  Moi bo loc nen bao cao:
+    accuracy, precision, recall, f1, roc_auc,
+    acceptance_rate, confusion matrix / FPR
+
+  Bang ket qua (schema chung):
+    dataset,num_samples,accepted,acceptance_rate,
+    accuracy,precision,recall,f1,roc_auc
+
+  North-star: giam FPR (chap nhan hallucination) voi dieu kien
+  recall >= 0.70 tren hung cau tra loi dung.
+
+  DeBERTa: KHONG dung argmax tai nguong 0.5 lam quyet dinh cuoi;
+  luon dung nguong chon tren validation.
+
+--------------------------------------------------------------------------------
+7. CHAY KIEM THU
+--------------------------------------------------------------------------------
+
+  (Kich hoat venv truoc)
+
+  python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
+
+--------------------------------------------------------------------------------
+8. SU DUNG GOI PYTHON TRONG CODE KHAC
+--------------------------------------------------------------------------------
+
+  Tu thu muc goc du an (PYTHONPATH chua thu muc goc, hoac notebook
+  da sys.path.append('..')):
+
+      from src.filtering.ragas_feature_extractor import RagasFeatureExtractor
+      from src.filtering.ragas_filter import RagasFilter
+      from src.filtering.ragas_filter_trainer import RagasFilterTrainer
+      from src.filtering.llm_judge_filter import LLMJudgeFilter
+      from src.filtering.learned_filter import AnswerQualityClassifier
+
+  Chi tiet tham so xem docstring trong tung file src/filtering/.
+
+--------------------------------------------------------------------------------
+9. LUU Y KHI CHAY
+--------------------------------------------------------------------------------
+
+  - RAGAS (3.1) va LLM-judge can OPENAI_API_KEY hop le; DeBERTa/NLI khong.
+  - N_TIMES=3 o notebook 3.1 nhan doi chi phi API — thu subset truoc.
+  - Tren Kaggle: uu tien Notebook Secrets thay cho file .env;
+    dat repo root theo huong dan trong notebook Setup.
+  - DeBERTa: giu fp16: false; neu gap HuggingFace 401, dang xuat token
+    het han (hf auth logout) roi chay lai.
+  - Dong P=0.5 R=1.0 trong bang DeBERTa thuong la baseline "no filter",
+    khong phai model bi sap.
+  - Khong commit .env, venv/, hay site-packages.
+
+================================================================================
+  Xem them: HuongDanCaiDat.txt  (cong cu, moi truong, thu vien)
 ================================================================================

@@ -1,58 +1,196 @@
 ================================================================================
-HUONG DAN CAI DAT - RAG Answer Faithfulness Filtering
+                    HUONG DAN CAI DAT - RAGAS Answer Filtering
 ================================================================================
 
+Du an nay loc cau tra loi RAG theo do trung thuc (faithfulness) voi context
+da truy xuat. Pipeline:
+
+  retrieve -> generate -> filter(context, answer) -> accept / reject
+
+Phuong phap chinh: trich dac trung RAGAS (black-box) roi huan luyen bo loc
+sklearn. Baseline: LLM-as-judge va DeBERTa / NLI.
+
+--------------------------------------------------------------------------------
 1. YEU CAU HE THONG
--------------------
-- Python 3.10+ (khuyen nghi 3.11 hoặc 3.12)
-- Windows / Linux / macOS
-- GPU NVIDIA (khuyen nghi) de train DeBERTa; CPU van chay duoc nhung cham
-- Dung luong o dia: ~5 GB (moi truong + model HuggingFace tai ve)
+--------------------------------------------------------------------------------
 
-2. CAI DAT MOI TRUONG
----------------------
-Mo terminal tai thu muc goc cua de tai (thu muc chua file nay), chay:
+  - He dieu hanh: Windows / macOS / Linux
+  - Python >= 3.10 (khuyen nghi 3.11 hoac 3.12)
+  - Ket noi Internet (cai thu vien, goi API OpenAI, tai model HuggingFace)
+  - Dung luong o dia: khoang 5 GB (moi truong + model)
 
-    python -m venv venv
+  Tuy chon theo muc dich:
 
-Windows:
-    venv\Scripts\activate
+  - Chay RAGAS / LLM-judge: can OPENAI_API_KEY (xem muc 5)
+  - Train DeBERTa tren GPU NVIDIA (khuyen nghi):
+      * CUDA tuong thich
+      * GPU >= 4 GB VRAM (cau hinh batch_size=1 da toi uu cho laptop)
+  - CPU van chay duoc DeBERTa/NLI nhung cham hon nhieu
 
-Linux/macOS:
-    source venv/bin/activate
+--------------------------------------------------------------------------------
+2. CONG CU VA MOI TRUONG PHAT TRIEN
+--------------------------------------------------------------------------------
 
-Cai thu vien (KHONG dong goi san trong ban nop; cai tu PyPI):
+  Cong cu can thiet:
+  - Git            : clone ma nguon
+  - Python / venv  : moi truong ao (hoac Conda)
+  - pip            : cai thu vien Python
+  - Jupyter / VS Code / Cursor : chay notebook (tuy chon)
+  - Trinh duyet    : tai models/ tu Google Drive (tuy chon)
 
-    pip install -r requirements.txt
+  Moi truong ao (khuyen nghi):
+  - Ten goi y: ragas-eval
+  - Python trong moi truong: 3.10+
 
-Neu train DeBERTa tren GPU NVIDIA:
+--------------------------------------------------------------------------------
+3. CAI DAT BUOC BO
+--------------------------------------------------------------------------------
 
-    pip install torch --index-url https://download.pytorch.org/whl/cu124
+  Buoc 1. Clone / mo thu muc du an
 
-3. DU LIEU
-----------
-Tap du lieu nam trong thu muc data/:
-  - data/labeled_merged.csv       : toan bo mau de train/val
-  - data/labeled_merged_test.csv  : tap test dong bang (holdout) de danh gia
+      git clone https://github.com/Htaaxx/ragas-evaluation.git
+      cd ragas-evaluation
 
-Khong can tai them neu da co 2 file tren trong goi ma nguon.
+      (Neu da co san thu muc ma nguon thi chi can cd vao thu muc goc
+       — thu muc chua file HuongDanCaiDat.txt nay.)
 
-4. CAU HINH
------------
-- configs/experiments/filter_training.yaml  : duong dan data, seed, n_runs
-- configs/filtering/deberta_filter.yaml     : sieu tham so DeBERTa / NLI
+  Buoc 2. Tao moi truong ao
 
-Mac dinh:
-  - train tren labeled_merged.csv (tru cac mau trong test)
-  - danh gia tren labeled_merged_test.csv
-  - n_runs: 1
-  - seed: 42, test_size / val_ratio: 0.2
+      python -m venv venv
 
-5. LUU Y
---------
-- Khong can copy thu muc venv/ hoac site-packages vao ban nop.
-- Model DeBERTa se tu dong tai tu HuggingFace lan dau chay
-  (MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli).
-- Neu gap loi HuggingFace 401: dang xuat token het han (hf auth logout)
-  roi chay lai.
+      Windows:
+          venv\Scripts\activate
+
+      Linux / macOS:
+          source venv/bin/activate
+
+      (Hoac Conda: conda create -n ragas-eval python=3.11 -y
+       roi conda activate ragas-eval)
+
+  Buoc 3. Cai thu vien Python
+
+      pip install -r requirements.txt
+
+      Neu train DeBERTa tren GPU NVIDIA (tuy chon):
+
+          pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+  Buoc 4. Cau hinh API key
+
+      - Tao file .env o thu muc goc du an (khong co file mau .env_template).
+      - Them it nhat:
+
+          OPENAI_API_KEY=sk-...
+
+      - Tuy chon (neu notebook doc toi):
+
+          HUGGINGFACE_API_KEY=...
+          GOOGLE_API_KEY=...
+
+      - KHONG commit file .env co khoa that len Git.
+
+  Buoc 5. (Tuy chon) Tai thu muc models/
+
+      Neu can dung checkpoint da train san, tai thu muc models/ tu Google Drive:
+
+          https://drive.google.com/drive/folders/1ZrcY2-_Llr5GJSeZESIXcUmcUWDfjjBc?usp=sharing
+
+      Dat models/ ngay duoi thu muc goc du an (cung cap voi src/, notebooks/, data/).
+
+--------------------------------------------------------------------------------
+4. THU VIEN CHINH (requirements.txt)
+--------------------------------------------------------------------------------
+
+  RAGAS + LangChain (da pin phien ban):
+    ragas==0.1.9
+    langchain==0.2.16
+    langchain-core==0.2.43
+    langchain-openai==0.1.25
+
+  Mo hinh / NLP:
+    torch, transformers==4.40.2, tokenizers==0.19.1
+    sentence-transformers, sentencepiece, nltk
+
+  Hoc may / xu ly so lieu:
+    scikit-learn, xgboost, pandas, numpy, scipy
+
+  SDK goi LLM:
+    openai (>=1.0.0)
+    google-genai
+
+  Cau hinh / tien ich:
+    python-dotenv, pyyaml, tqdm, huggingface-hub, datasets
+
+  Truc quan (notebook):
+    matplotlib, seaborn
+
+  Kiem thu (dev, cai them neu can):
+    pip install pytest
+
+--------------------------------------------------------------------------------
+5. NHA CUNG CAP LLM VA BIEN MOI TRUONG
+--------------------------------------------------------------------------------
+
+  Provider / muc dich   | Bien moi truong (.env)   | Ghi chu
+  ----------------------|--------------------------|---------------------------
+  OpenAI (RAGAS)        | OPENAI_API_KEY           | Bat buoc cho notebook 3.1
+  OpenAI (LLM-judge)    | OPENAI_API_KEY           | Bat buoc cho notebook 4
+  Hugging Face (tuy chon)| HUGGINGFACE_API_KEY     | Token HF; DeBERTa public
+                                                 | van tai duoc khong token
+  Google (tuy chon)     | GOOGLE_API_KEY           | Neu notebook doc toi
+
+  Chi can dien key cho (cac) dich vu ban thuc su dung.
+  DeBERTa / NLI chu yeu dung model HuggingFace public
+  (MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli); khong bat buoc OpenAI.
+
+--------------------------------------------------------------------------------
+6. KIEM TRA CAI DAT
+--------------------------------------------------------------------------------
+
+  (Kich hoat venv truoc)
+
+  python --version
+  pip show ragas openai transformers scikit-learn
+  python -c "import ragas, openai, transformers; print('ok')"
+
+  Neu da cai pytest:
+
+      python -m pytest tests/test_data_split.py tests/test_imports.py tests/test_filter_metrics.py -v
+
+  Neu cac lenh tren chay thanh cong thi moi truong da san sang.
+
+--------------------------------------------------------------------------------
+7. CAU TRUC THU MUC CHINH (sau khi cai dat)
+--------------------------------------------------------------------------------
+
+  HuongDanCaiDat.txt / HuongDanSuDung.txt
+  README.md
+  requirements.txt
+  .env                         - (tao o Buoc 4; khong commit)
+  configs/
+    filtering/deberta_filter.yaml
+    experiments/filter_training.yaml
+  data/
+    labeled_merged.csv         - tap gan nhan chinh
+    labeled_merged_test.csv    - tap test dong bang (holdout)
+  notebooks/
+    3.1_ragas-feature-extraction.ipynb   - phuong phap chinh (buoc 1)
+    3.2_filter-training.ipynb            - phuong phap chinh (buoc 2)
+    4_llm-judge-filter.ipynb             - baseline LLM-judge
+    5_deberta_nli_baseline.ipynb         - baseline DeBERTa / NLI
+  scripts/
+    run_deberta_nli_baseline.py
+    train_filter.py / evaluate_filter.py
+  src/
+    filtering/                 - thu vien loc (RAGAS, LLM-judge, DeBERTa)
+    evaluation/
+    helper.py
+  models/                      - checkpoint (ragas_filter/, answer_filter/)
+  results/
+    ragas_filter/              - ket qua phuong phap chinh
+    llm_filter/                - ket qua LLM-judge
+    deberta_nli/               - ket qua DeBERTa / NLI
+
+================================================================================
+  Xem them: HuongDanSuDung.txt  (cach chay chuong trinh)
 ================================================================================
