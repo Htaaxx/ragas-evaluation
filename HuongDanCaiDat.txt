@@ -2,8 +2,10 @@
                     HUONG DAN CAI DAT - RAGAS Answer Filtering
 ================================================================================
 
-Du an nay loc cau tra loi RAG theo do trung thuc (faithfulness) voi context
-da truy xuat. Pipeline:
+Thesis codebase for **post-generation answer quality filtering** in 
+Retrieval-Augmented Generation (RAG). Retrieval is assumed correct; the filter 
+decides whether a generated answer is **faithful** to the retrieved context 
+(`premise = context`, `hypothesis = answer`). Pipeline:
 
   retrieve -> generate -> filter(context, answer) -> accept / reject
 
